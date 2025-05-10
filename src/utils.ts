@@ -67,12 +67,23 @@ export async function fetchUpstreamAuthToken({
     return [null, new Response('Missing code', { status: 400 })]
   }
 
+  const bodyParams = new URLSearchParams({
+    grant_type: grantType,
+    code: code,
+    redirect_uri: redirectUri,
+  }).toString()
+
+  const basicAuth = btoa(`${clientId}:${clientSecret}`)
+  const authHeader = `Basic ${basicAuth}`
+  console.log('[Schwab Utils] Authorization Header for Token Request:', authHeader) // TEMPORARY LOG
+
   const resp = await fetch(upstreamUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
+      Authorization: authHeader,
     },
-    body: new URLSearchParams({ clientId, clientSecret, code, redirectUri, grantType }).toString(),
+    body: bodyParams,
   })
   if (!resp.ok) {
     console.log(await resp.text())

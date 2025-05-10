@@ -25,10 +25,10 @@ Create a new [Google Cloud OAuth App](https://cloud.google.com/iam/docs/workforc
 - Set secrets via Wrangler
 
 ```bash
-wrangler secret put GOOGLE_CLIENT_ID
-wrangler secret put GOOGLE_CLIENT_SECRET
-wrangler secret put COOKIE_ENCRYPTION_KEY # add any random string here e.g. openssl rand -hex 32
-wrangler secret put HOSTED_DOMAIN # optional: use this when restrict google account domain
+npx wrangler secret put SCHWAB_CLIENT_ID
+npx wrangler secret put SCHWAB_CLIENT_SECRET
+npx wrangler secret put COOKIE_ENCRYPTION_KEY # add any random string here e.g. openssl rand -hex 32
+npx wrangler secret put HOSTED_DOMAIN # optional: use this when restrict google account domain
 ```
 
 #### Set up a KV namespace
