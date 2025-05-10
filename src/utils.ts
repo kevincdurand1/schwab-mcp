@@ -74,8 +74,7 @@ export async function fetchUpstreamAuthToken({
   }).toString()
 
   const basicAuth = btoa(`${clientId}:${clientSecret}`)
-  const authHeader = `Basic ${basicAuth}`
-  console.log('[Schwab Utils] Authorization Header for Token Request:', authHeader) // TEMPORARY LOG
+  const authHeader = `Basic ${basicAuth}`;
 
   const resp = await fetch(upstreamUrl, {
     method: 'POST',

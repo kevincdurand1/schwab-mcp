@@ -7,7 +7,7 @@ const app = new Hono<{ Bindings: Env & { OAUTH_PROVIDER: OAuthHelpers } }>()
 
 app.get('/authorize', async (c) => {
   const oauthReqInfo = await c.env.OAUTH_PROVIDER.parseAuthRequest(c.req.raw)
-  console.log('[SchwabHandler /authorize GET] Parsed oauthReqInfo:', oauthReqInfo)
+  // console.log('[SchwabHandler /authorize GET] Parsed oauthReqInfo:', oauthReqInfo)
   const { clientId } = oauthReqInfo
   if (!clientId) {
     console.error('[SchwabHandler /authorize GET] Invalid request: clientId is missing')
@@ -15,11 +15,11 @@ app.get('/authorize', async (c) => {
   }
 
   if (await clientIdAlreadyApproved(c.req.raw, oauthReqInfo.clientId, c.env.COOKIE_ENCRYPTION_KEY)) {
-    console.log('[SchwabHandler /authorize GET] Client ID already approved, redirecting to Schwab.')
+    // console.log('[SchwabHandler /authorize GET] Client ID already approved, redirecting to Schwab.')
     return redirectToSchwab(c, oauthReqInfo)
   }
 
-  console.log('[SchwabHandler /authorize GET] Client ID not approved, rendering approval dialog.')
+  // console.log('[SchwabHandler /authorize GET] Client ID not approved, rendering approval dialog.')
   return renderApprovalDialog(c.req.raw, {
     client: await c.env.OAUTH_PROVIDER.lookupClient(clientId),
     server: {
@@ -32,18 +32,18 @@ app.get('/authorize', async (c) => {
 
 app.post('/authorize', async (c) => {
   const { state, headers } = await parseRedirectApproval(c.req.raw, c.env.COOKIE_ENCRYPTION_KEY)
-  console.log('[SchwabHandler /authorize POST] Parsed approval state:', state)
+  // console.log('[SchwabHandler /authorize POST] Parsed approval state:', state)
   if (!state.oauthReqInfo) {
     console.error('[SchwabHandler /authorize POST] Invalid request: state.oauthReqInfo is missing')
     return c.text('Invalid request', 400)
   }
 
-  console.log('[SchwabHandler /authorize POST] Redirecting to Schwab with oauthReqInfo from approval:', state.oauthReqInfo)
+  // console.log('[SchwabHandler /authorize POST] Redirecting to Schwab with oauthReqInfo from approval:', state.oauthReqInfo)
   return redirectToSchwab(c, state.oauthReqInfo, headers)
 })
 
 async function redirectToSchwab(c: Context, oauthReqInfo: AuthRequest, headers: Record<string, string> = {}) {
-  console.log('[SchwabHandler redirectToSchwab] Called with oauthReqInfo:', oauthReqInfo, 'and headers:', headers)
+  // console.log('[SchwabHandler redirectToSchwab] Called with oauthReqInfo:', oauthReqInfo, 'and headers:', headers)
   // Schwab OAuth 2.0 authorize endpoint (replace with actual endpoint if different)
   const schwabAuthorizeUrl = 'https://api.schwabapi.com/v1/oauth/authorize'
   // Schwab scopes (replace with actual required scopes)
@@ -57,7 +57,7 @@ async function redirectToSchwab(c: Context, oauthReqInfo: AuthRequest, headers: 
     state: btoa(JSON.stringify(oauthReqInfo)),
     // Schwab does not use hostedDomain
   })
-  console.log('[SchwabHandler redirectToSchwab] Redirecting to location:', location)
+  // console.log('[SchwabHandler redirectToSchwab] Redirecting to location:', location)
 
   return new Response(null, {
     status: 302,
@@ -106,7 +106,7 @@ app.get('/callback', async (c) => {
 
   // Fetch the user info from Schwab
   const schwabUserPreferenceUrl = 'https://api.schwabapi.com/trader/v1/userPreference'
-  console.log(`[SchwabHandler /callback] Fetching user preferences from: ${schwabUserPreferenceUrl}`)
+  // console.log(`[SchwabHandler /callback] Fetching user preferences from: ${schwabUserPreferenceUrl}`)
   const userResponse = await fetch(schwabUserPreferenceUrl, {
     // Use the new URL
     headers: {
@@ -121,7 +121,7 @@ app.get('/callback', async (c) => {
   }
 
   const userPreferenceData: any = await userResponse.json() // Explicitly type as any for now
-  console.log('[SchwabHandler /callback] Received user preference data:', JSON.stringify(userPreferenceData, null, 2))
+  // console.log('[SchwabHandler /callback] Received user preference data:', JSON.stringify(userPreferenceData, null, 2)) // Keep this commented for future debugging
 
   // Extract data based on the provided UserPreference schema
   let userIdFromSchwab: string
@@ -148,9 +148,9 @@ app.get('/callback', async (c) => {
     }
   }
 
-  console.log(
-    `[SchwabHandler /callback] Using for MCP: userId='${userIdFromSchwab}', userName='${userNameFromSchwab}', email='${userEmailFromSchwab}'`,
-  )
+  // console.log(
+  //   `[SchwabHandler /callback] Using for MCP: userId='${userIdFromSchwab}', userName='${userNameFromSchwab}', email='${userEmailFromSchwab}'`,
+  // ) // Keep this commented for future debugging
 
   // Return back to the MCP client a new token
   const { redirectTo } = await c.env.OAUTH_PROVIDER.completeAuthorization({
