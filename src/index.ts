@@ -4,6 +4,7 @@ import { McpAgent } from 'agents/mcp'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { SchwabHandler } from './schwab-handler'
+import { schwabFetch } from './lib/schwabApi/http'
 
 // Context from the auth process, encrypted & stored in the auth token
 // and provided to the MyMCP as this.props
@@ -14,49 +15,60 @@ type Props = {
 }
 
 // Zod schema for an individual position (simplified)
-const SchwabPositionSchema = z.object({
-  shortQuantity: z.number().optional(),
-  averagePrice: z.number().optional(),
-  currentDayProfitLoss: z.number().optional(),
-  longQuantity: z.number().optional(),
-  instrument: z
-    .object({
-      cusip: z.string().optional(),
-      symbol: z.string().optional(),
-      description: z.string().optional(),
-      instrumentId: z.number().optional(),
-      type: z.string().optional(),
-    })
-    .optional(),
-  marketValue: z.number().optional(),
-})
+const SchwabPositionSchema = z
+  .object({
+    shortQuantity: z.number().optional(),
+    averagePrice: z.number().optional(),
+    currentDayProfitLoss: z.number().optional(),
+    longQuantity: z.number().optional(),
+    agedQuantity: z.number().optional(),
+    instrument: z
+      .object({
+        cusip: z.string().optional(),
+        symbol: z.string().optional(),
+        description: z.string().optional(),
+        instrumentId: z.number().optional(),
+        type: z.string().optional(),
+        assetType: z.enum(['CASH_EQUIVALENT', 'EQUITY', 'FIXED_INCOME', 'MUTUAL_FUND', 'OPTION']).optional(),
+      })
+      .passthrough()
+      .optional(),
+    marketValue: z.number().optional(),
+  })
+  .passthrough()
 
 // Zod schema for balances (simplified, focusing on a few key fields)
-const SchwabBalancesSchema = z.object({
-  availableFunds: z.number().optional(),
-  buyingPower: z.number().optional(),
-  cashBalance: z.number().optional(), // from initialBalances
-  accountValue: z.number().optional(), // from initialBalances
-  equity: z.number().optional(),
-  liquidationValue: z.number().optional(), // from initialBalances
-})
+const SchwabBalancesSchema = z
+  .object({
+    availableFunds: z.number().optional(),
+    buyingPower: z.number().optional(),
+    cashBalance: z.number().optional(), // from initialBalances
+    accountValue: z.number().optional(), // from initialBalances
+    equity: z.number().optional(),
+    liquidationValue: z.number().optional(), // from initialBalances
+  })
+  .passthrough()
 
 // Zod schema for a single securities account
-const SchwabSecuritiesAccountSchema = z.object({
-  accountNumber: z.string(),
-  isDayTrader: z.boolean().optional(),
-  isClosingOnlyRestricted: z.boolean().optional(),
-  positions: z.array(SchwabPositionSchema).optional(),
-  initialBalances: SchwabBalancesSchema.optional(),
-  currentBalances: SchwabBalancesSchema.optional(),
-  projectedBalances: SchwabBalancesSchema.optional(),
-})
+const SchwabSecuritiesAccountSchema = z
+  .object({
+    accountNumber: z.string(),
+    isDayTrader: z.boolean().optional(),
+    isClosingOnlyRestricted: z.boolean().optional(),
+    positions: z.array(SchwabPositionSchema).optional(),
+    initialBalances: SchwabBalancesSchema.optional(),
+    currentBalances: SchwabBalancesSchema.optional(),
+    projectedBalances: SchwabBalancesSchema.optional(),
+  })
+  .passthrough()
 
 // Zod schema for the array of accounts
 const SchwabAccountsResponseSchema = z.array(
-  z.object({
-    securitiesAccount: SchwabSecuritiesAccountSchema,
-  }),
+  z
+    .object({
+      securitiesAccount: SchwabSecuritiesAccountSchema,
+    })
+    .passthrough(),
 )
 
 export class MyMCP extends McpAgent<Props, Env> {
@@ -101,59 +113,21 @@ export class MyMCP extends McpAgent<Props, Env> {
           }
         }
 
-        const schwabAccountsUrl = 'https://api.schwabapi.com/trader/v1/accounts?fields=positions'
-        // Optional: add fields parameter e.g. ?fields=positions
-        // const schwabAccountsUrl = 'https://api.schwabapi.com/trader/v1/accounts?fields=positions';
-
         try {
-          console.log(`[MyMCP getSchwabAccounts] Fetching accounts from ${schwabAccountsUrl}`)
-          const response = await fetch(schwabAccountsUrl, {
+          console.log('[MyMCP getSchwabAccounts] Fetching accounts using schwabFetch')
+          const accounts = await schwabFetch<z.infer<typeof SchwabAccountsResponseSchema>>('/trader/v1/accounts', accessToken, {
             method: 'GET',
-            headers: {
-              Authorization: `Bearer ${accessToken}`,
-              Accept: 'application/json',
+            queryParams: {
+              fields: 'positions',
             },
           })
-
-          if (!response.ok) {
-            const errorText = await response.text()
-            console.error(`[MyMCP getSchwabAccounts] Error fetching accounts: ${response.status} ${response.statusText} - ${errorText}`)
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: `Error fetching Schwab accounts: ${response.status} ${response.statusText}. Details: ${errorText}`,
-                },
-              ],
-            }
-          }
-
-          const rawData = await response.json()
-          console.log('[MyMCP getSchwabAccounts] Raw accounts data:', JSON.stringify(rawData, null, 2))
-
-          // Validate with Zod
-          const parsedData = SchwabAccountsResponseSchema.safeParse(rawData)
-
-          if (!parsedData.success) {
-            console.error('[MyMCP getSchwabAccounts] Failed to parse Schwab accounts data:', parsedData.error)
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: `Error parsing Schwab accounts data. ${parsedData.error.toString()}`,
-                },
-              ],
-            }
-          }
-
-          const accounts = parsedData.data
 
           if (accounts.length === 0) {
             return { content: [{ type: 'text', text: 'No Schwab accounts found.' }] }
           }
 
           // Format the output
-          const accountSummaries = accounts.map((acc) => ({
+          const accountSummaries = accounts.map((acc: any) => ({
             ...acc.securitiesAccount,
           }))
 
@@ -165,9 +139,9 @@ export class MyMCP extends McpAgent<Props, Env> {
             ],
           }
         } catch (error: any) {
-          console.error('[MyMCP getSchwabAccounts] Unexpected error:', error)
+          console.error('[MyMCP getSchwabAccounts] Error with schwabFetch:', error)
           return {
-            content: [{ type: 'text', text: `An unexpected error occurred: ${error.message}` }],
+            content: [{ type: 'text', text: `An error occurred fetching Schwab accounts: ${error.message}` }],
           }
         }
       },

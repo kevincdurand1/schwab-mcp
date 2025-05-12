@@ -2,6 +2,8 @@ import type { AuthRequest, OAuthHelpers } from '@cloudflare/workers-oauth-provid
 import { Hono, Context } from 'hono'
 import { fetchUpstreamAuthToken, getUpstreamAuthorizeUrl, Props } from './utils'
 import { clientIdAlreadyApproved, parseRedirectApproval, renderApprovalDialog } from './workers-oauth-utils'
+import { schwabFetch } from './lib/schwabApi/http'
+import { UserPreference } from './tools/schemas'
 
 const app = new Hono<{ Bindings: Env & { OAUTH_PROVIDER: OAuthHelpers } }>()
 
@@ -105,69 +107,56 @@ app.get('/callback', async (c) => {
   }
 
   // Fetch the user info from Schwab
-  const schwabUserPreferenceUrl = 'https://api.schwabapi.com/trader/v1/userPreference'
-  // console.log(`[SchwabHandler /callback] Fetching user preferences from: ${schwabUserPreferenceUrl}`)
-  const userResponse = await fetch(schwabUserPreferenceUrl, {
-    // Use the new URL
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
-  })
+  try {
+    const userPreferenceData = await schwabFetch<UserPreference>('/trader/v1/userPreference', accessToken, {
+      method: 'GET',
+    })
 
-  if (!userResponse.ok) {
-    const errorText = await userResponse.text()
-    console.error(`[SchwabHandler /callback] Failed to fetch user preferences. Status: ${userResponse.status}, Body: ${errorText}`)
-    return c.text(`Failed to fetch user preferences: ${errorText}`, 500)
-  }
+    // Extract data based on the provided UserPreference schema
+    let userIdFromSchwab: string
+    let userNameFromSchwab: string = 'Schwab User' // Default name
+    const userEmailFromSchwab: string = '' // Email is not in the schema
 
-  const userPreferenceData: any = await userResponse.json() // Explicitly type as any for now
-  // console.log('[SchwabHandler /callback] Received user preference data:', JSON.stringify(userPreferenceData, null, 2)) // Keep this commented for future debugging
-
-  // Extract data based on the provided UserPreference schema
-  let userIdFromSchwab: string
-  let userNameFromSchwab: string = 'Schwab User' // Default name
-  const userEmailFromSchwab: string = '' // Email is not in the schema
-
-  if (userPreferenceData?.streamerInfo?.schwabClientCustomerId) {
-    userIdFromSchwab = userPreferenceData.streamerInfo.schwabClientCustomerId
-  } else {
-    // Fallback if schwabClientCustomerId is not available - this is less ideal
-    console.warn(
-      '[SchwabHandler /callback] streamerInfo.schwabClientCustomerId not found in UserPreference. Falling back to a temporary ID.',
-    )
-    userIdFromSchwab = `schwabUser_${Date.now()}`
-  }
-
-  if (userPreferenceData?.accounts && Array.isArray(userPreferenceData.accounts)) {
-    const primaryAccount = userPreferenceData.accounts.find((acc: any) => acc.primaryAccount === true)
-    if (primaryAccount && primaryAccount.nickName) {
-      userNameFromSchwab = primaryAccount.nickName
-    } else if (userPreferenceData.accounts.length > 0 && userPreferenceData.accounts[0].nickName) {
-      // Fallback to the first account's nickname if no primary or primary has no nickname
-      userNameFromSchwab = userPreferenceData.accounts[0].nickName
+    if (userPreferenceData?.streamerInfo?.[0]?.schwabClientCustomerId) {
+      userIdFromSchwab = userPreferenceData.streamerInfo[0].schwabClientCustomerId
+    } else {
+      // Fallback if schwabClientCustomerId is not available - this is less ideal
+      console.warn(
+        '[SchwabHandler /callback] streamerInfo.schwabClientCustomerId not found in UserPreference. Falling back to a temporary ID.',
+      )
+      userIdFromSchwab = `schwabUser_${Date.now()}`
     }
+
+    if (userPreferenceData?.accounts && Array.isArray(userPreferenceData.accounts)) {
+      const primaryAccount = userPreferenceData.accounts.find((acc) => acc.primaryAccount === true)
+      if (primaryAccount && primaryAccount.nickName) {
+        userNameFromSchwab = primaryAccount.nickName
+      } else if (userPreferenceData.accounts.length > 0 && userPreferenceData.accounts[0].nickName) {
+        // Fallback to the first account's nickname if no primary or primary has no nickname
+        userNameFromSchwab = userPreferenceData.accounts[0].nickName
+      }
+    }
+
+    // Return back to the MCP client a new token
+    const { redirectTo } = await c.env.OAUTH_PROVIDER.completeAuthorization({
+      request: oauthReqInfo,
+      userId: userIdFromSchwab, // Use the extracted/placeholder ID
+      metadata: {
+        label: userNameFromSchwab, // Use the extracted/placeholder name
+      },
+      scope: oauthReqInfo.scope,
+      props: {
+        name: userNameFromSchwab, // Use the extracted/placeholder name
+        email: userEmailFromSchwab, // Use the extracted/placeholder email
+        accessToken, // The Schwab access token
+      } as Props,
+    })
+
+    return Response.redirect(redirectTo)
+  } catch (error) {
+    console.error(`[SchwabHandler /callback] Failed to fetch user preferences:`, error)
+    return c.text(`Failed to fetch user preferences: ${error instanceof Error ? error.message : String(error)}`, 500)
   }
-
-  // console.log(
-  //   `[SchwabHandler /callback] Using for MCP: userId='${userIdFromSchwab}', userName='${userNameFromSchwab}', email='${userEmailFromSchwab}'`,
-  // ) // Keep this commented for future debugging
-
-  // Return back to the MCP client a new token
-  const { redirectTo } = await c.env.OAUTH_PROVIDER.completeAuthorization({
-    request: oauthReqInfo,
-    userId: userIdFromSchwab, // Use the extracted/placeholder ID
-    metadata: {
-      label: userNameFromSchwab, // Use the extracted/placeholder name
-    },
-    scope: oauthReqInfo.scope,
-    props: {
-      name: userNameFromSchwab, // Use the extracted/placeholder name
-      email: userEmailFromSchwab, // Use the extracted/placeholder email
-      accessToken, // The Schwab access token
-    } as Props,
-  })
-
-  return Response.redirect(redirectTo)
 })
 
 export { app as SchwabHandler }
