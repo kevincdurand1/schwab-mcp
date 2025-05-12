@@ -1,5 +1,6 @@
 import { SchwabApiError } from '../errors'
 import { schwabApiMetadata, HttpMethod, MethodMetadata } from './metadata'
+import { z } from 'zod'
 
 // Shared primitives -------------------------------------------------
 
@@ -52,19 +53,31 @@ interface SchwabFetchRequestOptions {
 }
 
 /**
+ * Create a type-safe wrapper for an endpoint
+ * @param endpoint The API endpoint
+ * @param method The HTTP method
+ * @returns A function that calls schwabFetch with the correct typing
+ */
+export function createEndpoint<T>(endpoint: SchwabEndpoint, method: HttpMethod) {
+  return (accessToken: string, options: Omit<SchwabFetchRequestOptions, 'method'>): Promise<T> => {
+    return schwabFetch(endpoint, accessToken, { ...options, method })
+  }
+}
+
+/**
  * Metadata-driven fetch wrapper for Schwab API calls.
  * Handles URL construction, auth, input validation, response parsing, and error handling.
  * Throws SchwabApiError on any failure.
  * @param endpointTemplate The API endpoint template string.
  * @param accessToken The Schwab API access token.
  * @param requestOptions Options including method, path/query params, body, and minimal init overrides.
- * @returns A Promise resolving to the parsed data on success.
+ * @returns A Promise resolving to the parsed data with type inferred from the schema.
  */
-export async function schwabFetch<TResponse>(
+export async function schwabFetch<T = any>(
   endpointTemplate: SchwabEndpoint,
   accessToken: string,
   requestOptions: SchwabFetchRequestOptions,
-): Promise<TResponse> {
+): Promise<T> {
   // 1. Get Method-Specific Metadata
   const endpointMetadataMap = schwabApiMetadata[endpointTemplate]
   if (!endpointMetadataMap) {
@@ -239,8 +252,7 @@ export async function schwabFetch<TResponse>(
     // If explicitly empty (content-length is 0), return empty array for collections or null for singleton
     if (contentLength === '0') {
       console.log(`[schwabFetch] Empty response (content-length: 0)`)
-      // Type assertion to TResponse is necessary here
-      return (isCollectionResponse ? [] : null) as TResponse
+      return (isCollectionResponse ? [] : null) as T
     }
 
     // Otherwise try to parse as JSON
@@ -258,7 +270,8 @@ export async function schwabFetch<TResponse>(
       )
     }
 
-    return parsedResponse.data as TResponse
+    // Return typed data
+    return parsedResponse.data as T
   } catch (jsonError: any) {
     console.error(`[schwabFetch] Error parsing JSON response:`, jsonError)
     throw new SchwabApiError(response.status, undefined, `Failed to parse API response: ${jsonError.message}`)

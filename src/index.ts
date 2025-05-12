@@ -5,6 +5,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { SchwabHandler } from './schwab-handler'
 import { schwabFetch } from './lib/schwabApi/http'
+import { getAccounts } from './lib/schwabApi/accounts'
 
 // Context from the auth process, encrypted & stored in the auth token
 // and provided to the MyMCP as this.props
@@ -115,11 +116,8 @@ export class MyMCP extends McpAgent<Props, Env> {
 
         try {
           console.log('[MyMCP getSchwabAccounts] Fetching accounts using schwabFetch')
-          const accounts = await schwabFetch<z.infer<typeof SchwabAccountsResponseSchema>>('/trader/v1/accounts', accessToken, {
-            method: 'GET',
-            queryParams: {
-              fields: 'positions',
-            },
+          const accounts = await getAccounts(accessToken, {
+            queryParams: { fields: 'positions' },
           })
 
           if (accounts.length === 0) {
