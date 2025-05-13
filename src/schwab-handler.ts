@@ -2,8 +2,12 @@ import type { AuthRequest, OAuthHelpers } from '@cloudflare/workers-oauth-provid
 import { Hono, Context } from 'hono'
 import { fetchUpstreamAuthToken, getUpstreamAuthorizeUrl, Props } from './utils'
 import { clientIdAlreadyApproved, parseRedirectApproval, renderApprovalDialog } from './workers-oauth-utils'
-import { schwabFetch } from './lib/schwabApi/http'
-import { UserPreference } from './tools/schemas'
+import { configureSchwabApi, SANDBOX_API_CONFIG } from './lib/schwabApi/http'
+import { getUserPreference } from './lib/schwabApi/endpoints'
+
+// Configure API for Sandbox environment (runs once when handler initializes)
+// configureSchwabApi(SANDBOX_API_CONFIG) // Commented out to use DEFAULT_API_CONFIG
+// console.log('[SchwabHandler] Schwab API configured for Sandbox environment.') // Commented out related log
 
 const app = new Hono<{ Bindings: Env & { OAUTH_PROVIDER: OAuthHelpers } }>()
 
@@ -108,11 +112,9 @@ app.get('/callback', async (c) => {
 
   // Fetch the user info from Schwab
   try {
-    const userPreferenceData = await schwabFetch<UserPreference>('/trader/v1/userPreference', accessToken, {
-      method: 'GET',
-    })
+    const userPreferenceData = await getUserPreference(accessToken)
 
-    // Extract data based on the provided UserPreference schema
+    // Extract data based on the (now inferred) UserPreference schema
     let userIdFromSchwab: string
     let userNameFromSchwab: string = 'Schwab User' // Default name
     const userEmailFromSchwab: string = '' // Email is not in the schema
@@ -128,7 +130,10 @@ app.get('/callback', async (c) => {
     }
 
     if (userPreferenceData?.accounts && Array.isArray(userPreferenceData.accounts)) {
-      const primaryAccount = userPreferenceData.accounts.find((acc) => acc.primaryAccount === true)
+      // Explicitly type 'acc' based on the UserPreferenceAccount schema
+      const primaryAccount = userPreferenceData.accounts.find(
+        (acc: { primaryAccount?: boolean; nickName?: string }) => acc.primaryAccount === true,
+      )
       if (primaryAccount && primaryAccount.nickName) {
         userNameFromSchwab = primaryAccount.nickName
       } else if (userPreferenceData.accounts.length > 0 && userPreferenceData.accounts[0].nickName) {

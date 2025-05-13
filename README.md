@@ -140,3 +140,85 @@ The MCP Remote library enables your server to expose tools that can be invoked b
 - Provides a structured way to define tools
 - Handles serialization and deserialization of requests and responses
 - Maintains the Server-Sent Events (SSE) connection between clients and your server
+
+# Schwab MCP
+
+## Schwab API Client
+
+This project includes a fully type-safe client for the Schwab API. It provides two ways to interact with the API:
+
+### Named Endpoint Functions
+
+Import specific endpoint functions for a clean, explicit API:
+
+```typescript
+import { getAccounts, createOrder, asAccountNumber } from './lib/schwabApi'
+import { OrderType, OrderSide, OrderDuration } from './tools/schemas'
+
+// Get accounts
+const accounts = await getAccounts(accessToken)
+
+// Create an order
+const order = await createOrder(accessToken, {
+  pathParams: { accountNumber: asAccountNumber('12345678') },
+  body: {
+    symbol: 'AAPL',
+    orderType: OrderType.MARKET,
+    side: OrderSide.BUY,
+    quantity: 1,
+    duration: OrderDuration.DAY
+  }
+})
+```
+
+### Dynamic Proxy-based Access
+
+For more dynamic access patterns, use the Proxy-based client:
+
+```typescript
+import { Schwab, asAccountNumber } from './lib/schwabApi'
+import { OrderType, OrderSide, OrderDuration } from './tools/schemas'
+
+// Get accounts
+const accounts = await Schwab.GET__trader_v1_accounts(accessToken)
+
+// Create an order
+const order = await Schwab.POST__trader_v1_accounts_accountNumber_orders(accessToken, {
+  pathParams: { accountNumber: asAccountNumber('12345678') },
+  body: {
+    symbol: 'AAPL',
+    orderType: OrderType.MARKET,
+    side: OrderSide.BUY,
+    quantity: 1,
+    duration: OrderDuration.DAY
+  }
+})
+```
+
+### Configuration
+
+Switch between production and sandbox environments:
+
+```typescript
+import { configureSchwabApi, SANDBOX_API_CONFIG } from './lib/schwabApi'
+
+// Use sandbox environment
+configureSchwabApi(SANDBOX_API_CONFIG)
+
+// Or custom configuration
+configureSchwabApi({
+  baseUrl: 'https://your-custom-api-url.com',
+  environment: 'production'
+})
+```
+
+### Type Safety
+
+All parameters and responses are fully typed:
+
+- Path parameters: Required for endpoints with URL placeholders
+- Query parameters: Validated against specific endpoint schemas
+- Request bodies: Strongly typed with zod validation
+- Responses: Parsed and validated against response schemas
+
+This ensures you can't forget required parameters or pass the wrong data types.

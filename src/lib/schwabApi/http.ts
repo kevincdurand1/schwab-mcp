@@ -1,170 +1,243 @@
+import { ZodType } from 'zod'
 import { SchwabApiError } from '../errors'
-import { schwabApiMetadata, HttpMethod, MethodMetadata } from './metadata'
 import { z } from 'zod'
+
+// Re-export core schemas and types (Removed as per instruction 1)
+// export { OrderStatus, OrderSide, OrderType, OrderDuration, type Order, type OrderRequest, type UserPreference } from '../../tools/schemas'
+// export { asAccountNumber, asOrderId, asTransactionId, type AccountNumber, type OrderId, type TransactionId } from '../../tools/types'
 
 // Shared primitives -------------------------------------------------
 
-// Schwab API base URL
-const SCHWAB_API_BASE_URL = 'https://api.schwabapi.com'
+// API configuration options
+export interface SchwabApiConfig {
+  baseUrl: string
+  environment: 'production' | 'sandbox'
+  enableLogging?: boolean
+}
+
+// Default API configuration
+export const DEFAULT_API_CONFIG: SchwabApiConfig = {
+  baseUrl: 'https://api.schwabapi.com',
+  environment: 'production',
+  enableLogging: true,
+}
+
+// Sandbox API configuration
+export const SANDBOX_API_CONFIG: SchwabApiConfig = {
+  baseUrl: 'https://api-sandbox.schwabapi.com', // Adjust to actual sandbox URL
+  environment: 'sandbox',
+  enableLogging: true,
+}
+
+// Active configuration, can be changed at runtime
+let apiConfig: SchwabApiConfig = DEFAULT_API_CONFIG
+
+/**
+ * Set the API configuration to use for all Schwab API calls
+ * @param config The API configuration to use
+ */
+export function configureSchwabApi(config: Partial<SchwabApiConfig>): void {
+  apiConfig = {
+    ...DEFAULT_API_CONFIG, // Base defaults
+    ...apiConfig, // Current overrides
+    ...config, // New overrides
+  }
+}
+
+// --- Core Types ---
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'OPTIONS' | 'HEAD'
+
+// Define generic types for params/body/response based on schemas
+export type InferPathParams<S> = S extends ZodType<infer P> ? P : undefined
+export type InferQueryParams<S> = S extends ZodType<infer Q> ? Q : undefined
+export type InferBody<S> = S extends ZodType<infer B> ? B : undefined
+export type InferResponse<S> = S extends ZodType<infer R> ? R : undefined
+
+// New: Metadata structure for each endpoint
+export interface EndpointMetadata<
+  PathSchema extends ZodType | undefined = undefined,
+  QuerySchema extends ZodType | undefined = undefined,
+  BodySchema extends ZodType | undefined = undefined,
+  ResponseSchema extends ZodType = ZodType, // Response schema is required
+  M extends HttpMethod = HttpMethod,
+> {
+  path: string // The URL path template (e.g., /trader/v1/accounts/{accountNumber})
+  method: M
+  pathSchema?: PathSchema
+  querySchema?: QuerySchema
+  bodySchema?: BodySchema
+  responseSchema: ResponseSchema
+  // Optional: Add description, tags, etc. later if needed
+}
 
 // --- Endpoint Definitions ---
 
-// Trader API v1 Endpoints
-export type TraderEndpoint =
-  | '/trader/v1/accounts/accountNumbers'
-  | '/trader/v1/accounts'
-  | '/trader/v1/accounts/{accountNumber}'
-  | '/trader/v1/accounts/{accountNumber}/orders'
-  | '/trader/v1/accounts/{accountNumber}/orders/{orderId}'
-  | '/trader/v1/orders' // Corresponds to /orders in the screenshot context
-  | '/trader/v1/accounts/{accountNumber}/previewOrder'
-  | '/trader/v1/accounts/{accountNumber}/transactions'
-  | '/trader/v1/accounts/{accountNumber}/transactions/{transactionId}'
-  | '/trader/v1/userPreference' // Corresponds to /userPreference
-
-// Market Data API v1 Endpoints
-export type MarketDataEndpoint =
-  | '/marketdata/v1/quotes'
-  | '/marketdata/v1/{symbol_id}/quotes'
-  | '/marketdata/v1/chains'
-  | '/marketdata/v1/expirationchain'
-  | '/marketdata/v1/pricehistory'
-  | '/marketdata/v1/movers/{symbol_id}'
-  | '/marketdata/v1/markets'
-  | '/marketdata/v1/markets/{market_id}'
-  | '/marketdata/v1/instruments'
-  | '/marketdata/v1/instruments/{cusip_id}'
-
-// Combined Endpoint Type
-export type SchwabEndpoint = TraderEndpoint | MarketDataEndpoint
-
-// Type for path parameters (keys are param names like 'accountNumber', values are string/number)
-export type PathParams = Record<string, string | number>
-
 // --- SchwabFetch Options (Updated) ---
-interface SchwabFetchRequestOptions {
-  method: HttpMethod
-  pathParams?: PathParams
-  queryParams?: Record<string, any> // Data for query parameters
-  body?: any // Data for request body
+// Adjusted: Generic parameters P, Q, B now represent the actual data types, not necessarily schemas
+export interface SchwabFetchRequestOptions<P = unknown, Q = unknown, B = unknown> {
+  pathParams?: P
+  queryParams?: Q
+  body?: B
   // 'init' can still be used for overriding fetch-specific things like cache, signal etc.
-  // but method should primarily come from metadata.
   init?: Omit<RequestInit, 'body' | 'method'>
 }
 
+// --- Endpoint Factory (Updated) ---
+
 /**
- * Create a type-safe wrapper for an endpoint
- * @param endpoint The API endpoint
- * @param method The HTTP method
- * @returns A function that calls schwabFetch with the correct typing
+ * Creates a type-safe function to call a Schwab API endpoint.
+ * @param meta The metadata object describing the endpoint (path, method, schemas).
+ * @returns An async function that takes an access token and options, returning the parsed response.
  */
-export function createEndpoint<T>(endpoint: SchwabEndpoint, method: HttpMethod) {
-  return (accessToken: string, options: Omit<SchwabFetchRequestOptions, 'method'>): Promise<T> => {
-    return schwabFetch(endpoint, accessToken, { ...options, method })
+export function createEndpoint<
+  // Infer types P, Q, B, R from the schemas provided in meta
+  P,
+  Q,
+  B,
+  R,
+  M extends HttpMethod,
+  // Constrain Meta to ensure it provides schemas that can be inferred
+  // Relaxed ZodType<X> to ZodType<X, any, any> to allow different input/output types
+  Meta extends EndpointMetadata<
+    ZodType<P, any, any> | undefined,
+    ZodType<Q, any, any> | undefined,
+    ZodType<B, any, any> | undefined,
+    ZodType<R, any, any>,
+    M
+  >,
+>(
+  meta: Meta, // Accept the metadata object
+) {
+  // Removed InferPathParams, InferQueryParams, InferBody, InferResponse types inside
+  // Directly use the inferred generics P, Q, B, R instead
+
+  // Return the callable endpoint function
+  return (
+    accessToken: string,
+    // Options are optional, types derived directly from inferred generics P, Q, B
+    options: SchwabFetchRequestOptions<P, Q, B> = {},
+  ): Promise<R> => {
+    // Return type uses inferred generic R directly
+    // Pass the metadata object and options to schwabFetch
+    // Method is part of meta, so not needed in the options passed here
+    // Pass inferred generics P, Q, B, R, M directly to schwabFetch
+    return schwabFetch<P, Q, B, R, M>(
+      accessToken,
+      meta, // Pass the full metadata object
+      options, // Pass the request options
+    )
   }
 }
 
-/**
- * Metadata-driven fetch wrapper for Schwab API calls.
- * Handles URL construction, auth, input validation, response parsing, and error handling.
- * Throws SchwabApiError on any failure.
- * @param endpointTemplate The API endpoint template string.
- * @param accessToken The Schwab API access token.
- * @param requestOptions Options including method, path/query params, body, and minimal init overrides.
- * @returns A Promise resolving to the parsed data with type inferred from the schema.
- */
-export async function schwabFetch<T = any>(
-  endpointTemplate: SchwabEndpoint,
-  accessToken: string,
-  requestOptions: SchwabFetchRequestOptions,
-): Promise<T> {
-  // 1. Get Method-Specific Metadata
-  const endpointMetadataMap = schwabApiMetadata[endpointTemplate]
-  if (!endpointMetadataMap) {
-    throw new SchwabApiError(0, undefined, `[schwabFetch] No metadata defined for endpoint template: ${endpointTemplate}`)
-  }
-
-  const method = requestOptions.method
-  const methodMetadata = endpointMetadataMap[method]
-  if (!methodMetadata) {
-    throw new SchwabApiError(405, undefined, `[schwabFetch] Method ${method} not defined/allowed for endpoint: ${endpointTemplate}`) // 405 Method Not Allowed
-  }
-
-  const { pathParams, queryParams, body, init = {} } = requestOptions
-
-  // 2. Validate Path Parameters
-  if (methodMetadata.pathSchema && pathParams) {
-    const parsedPathParams = methodMetadata.pathSchema.safeParse(pathParams)
-    if (!parsedPathParams.success) {
-      throw new SchwabApiError(
-        400,
-        parsedPathParams.error.format(),
-        `[schwabFetch] Invalid path parameters for ${method} ${endpointTemplate}`,
-      )
-    }
-    // Note: pathParams are used directly in substitution, no need to use parsedPathParams.data unless transformation is needed
-  } else if (methodMetadata.pathSchema && !pathParams && String(endpointTemplate).includes('{')) {
-    // Check if path params are required but not provided
-    throw new SchwabApiError(400, undefined, `[schwabFetch] Path parameters required but not provided for ${method} ${endpointTemplate}`)
-  }
-
-  // 3. Substitute Path Parameters
-  let finalEndpointPath = String(endpointTemplate)
+// Extract URL construction to a separate function
+function buildUrl(endpointTemplate: string, pathParams?: Record<string, string | number>, queryParams?: Record<string, any>): URL {
+  // 1. Substitute Path Parameters
+  let finalEndpointPath = endpointTemplate
   if (pathParams) {
     Object.entries(pathParams).forEach(([key, value]) => {
       const placeholder = `{${key}}`
       if (finalEndpointPath.includes(placeholder)) {
         finalEndpointPath = finalEndpointPath.replace(placeholder, String(value))
       } else {
-        console.warn(`[schwabFetch] Path parameter '${key}' provided but not found in template '${endpointTemplate}'`)
+        if (apiConfig.enableLogging) {
+          console.warn(`[buildUrl] Path parameter \'${key}\' provided but not found in template \'${endpointTemplate}\'`)
+        }
       }
     })
   }
   if (finalEndpointPath.includes('{') && finalEndpointPath.includes('}')) {
-    throw new SchwabApiError(400, undefined, `[schwabFetch] Unsubstituted placeholders remain in path: ${finalEndpointPath}`)
+    throw new SchwabApiError(400, undefined, `[buildUrl] Unsubstituted placeholders remain in path: ${finalEndpointPath}`)
   }
 
-  // 4. Validate Query Parameters
-  let validatedQueryParams = queryParams
-  if (methodMetadata.querySchema) {
-    const parsedQueryParams = methodMetadata.querySchema.safeParse(queryParams ?? {}) // Parse empty object if none provided
-    if (!parsedQueryParams.success) {
-      throw new SchwabApiError(
-        400,
-        parsedQueryParams.error.format(),
-        `[schwabFetch] Invalid query parameters for ${method} ${endpointTemplate}`,
-      )
-    }
-    validatedQueryParams = parsedQueryParams.data
-  }
-
-  // 5. Construct URL
-  const url = new URL(SCHWAB_API_BASE_URL + finalEndpointPath)
-  if (validatedQueryParams) {
-    Object.entries(validatedQueryParams).forEach(([key, value]) => {
+  // 2. Construct URL with query parameters
+  const url = new URL(apiConfig.baseUrl + finalEndpointPath)
+  if (queryParams) {
+    Object.entries(queryParams).forEach(([key, value]) => {
       if (value !== undefined) {
         url.searchParams.set(key, String(value))
       }
     })
   }
 
-  // 6. Validate Body
-  let validatedBody = body
-  if (methodMetadata.bodySchema) {
-    const parsedBody = methodMetadata.bodySchema.safeParse(body ?? undefined) // Validate body or undefined if none provided
-    if (!parsedBody.success) {
-      throw new SchwabApiError(400, parsedBody.error.format(), `[schwabFetch] Invalid request body for ${method} ${endpointTemplate}`)
+  return url
+}
+
+/**
+ * Metadata-driven fetch wrapper for Schwab API calls.
+ * Handles URL construction, auth, input validation, response parsing, and error handling.
+ * Throws SchwabApiError on any failure.
+ * @param accessToken The Schwab API access token.
+ * @param meta The metadata object describing the endpoint (path, method, schemas).
+ * @param requestOptions Options including path/query params, body, and minimal init overrides.
+ * @returns A Promise resolving to the parsed data with type inferred from the schema.
+ */
+export async function schwabFetch<P, Q, B, R, M extends HttpMethod>(
+  accessToken: string,
+  // Accept the full metadata object
+  meta: EndpointMetadata<ZodType<P> | undefined, ZodType<Q> | undefined, ZodType<B> | undefined, ZodType<R>, M>,
+  // Options object contains params and body matching the inferred types P, Q, B
+  requestOptions: SchwabFetchRequestOptions<P, Q, B>,
+): Promise<R> {
+  // Return type R is inferred from meta.responseSchema
+  // 1. Extract info from metadata and options
+  const { pathParams, queryParams, body, init = {} } = requestOptions
+  const { path: endpointTemplate, method, pathSchema, querySchema, bodySchema, responseSchema } = meta // Use meta
+
+  // 2. Validate Path Parameters (using meta.pathSchema)
+  if (pathSchema && pathParams) {
+    // Check meta.pathSchema
+    const parsedPathParams = pathSchema.safeParse(pathParams)
+    if (!parsedPathParams.success) {
+      throw new SchwabApiError(
+        400,
+        parsedPathParams.error.format(),
+        `[schwabFetch] Invalid path parameters for ${method} ${endpointTemplate}`, // Use meta.method and meta.path
+      )
     }
-    validatedBody = parsedBody.data
-  } else if (body) {
-    // If a body is provided but no bodySchema is defined for the method
-    console.warn(`[schwabFetch] Request body provided for ${method} ${endpointTemplate}, but no bodySchema is defined in metadata.`)
+    // Path params used directly in buildUrl substitution
+  } else if (pathSchema && !pathParams && endpointTemplate.includes('{')) {
+    // Check meta.path for placeholders
+    // Check if path params defined in schema are required (by checking path template) but not provided
+    throw new SchwabApiError(400, undefined, `[schwabFetch] Path parameters required but not provided for ${method} ${endpointTemplate}`)
   }
 
-  // 7. Prepare RequestInit
+  // 3. Validate Query Parameters (using meta.querySchema)
+  let validatedQueryParams = queryParams
+  if (querySchema) {
+    // Check meta.querySchema
+    const parsedQueryParams = querySchema.safeParse(queryParams ?? {}) // Parse empty object if none provided
+    if (!parsedQueryParams.success) {
+      throw new SchwabApiError(
+        400,
+        parsedQueryParams.error.format(),
+        `[schwabFetch] Invalid query parameters for ${method} ${endpointTemplate}`, // Use meta.method and meta.path
+      )
+    }
+    validatedQueryParams = parsedQueryParams.data as Q | undefined // Assign validated data
+  }
+
+  // 4. Construct URL using the helper (using meta.path)
+  const url = buildUrl(endpointTemplate, pathParams as Record<string, string | number>, validatedQueryParams as Record<string, any>)
+
+  // 5. Validate Body (using meta.bodySchema)
+  let validatedBody = body
+  if (bodySchema) {
+    // Check meta.bodySchema
+    const parsedBody = bodySchema.safeParse(body ?? undefined) // Validate body or undefined if none provided
+    if (!parsedBody.success) {
+      throw new SchwabApiError(400, parsedBody.error.format(), `[schwabFetch] Invalid request body for ${method} ${endpointTemplate}`) // Use meta.method and meta.path
+    }
+    validatedBody = parsedBody.data as B | undefined // Assign validated data
+  } else if (body) {
+    if (apiConfig.enableLogging) {
+      console.warn(`[schwabFetch] Request body provided for ${method} ${endpointTemplate}, but no bodySchema is defined in metadata.`) // Use meta.method and meta.path
+    }
+  }
+
+  // 6. Prepare RequestInit (using meta.method)
   const requestInit: RequestInit = {
     ...init,
-    method: method, // Use the validated method from requestOptions
+    method: method, // Use method from meta
     headers: {
       ...(init.headers ?? {}),
       Authorization: `Bearer ${accessToken}`,
@@ -172,34 +245,43 @@ export async function schwabFetch<T = any>(
       // Content-Type added below if body exists
     },
   }
+  // Check method from meta for body serialization
   if (validatedBody !== undefined && (method === 'POST' || method === 'PUT' || method === 'PATCH')) {
     requestInit.body = JSON.stringify(validatedBody)
     ;(requestInit.headers as Record<string, string>)['Content-Type'] = 'application/json'
   }
 
-  // 8. Perform Fetch
+  // 7. Perform Fetch
   let response: Response
   try {
-    console.log(`[schwabFetch] Fetching ${url.toString()}, method: ${method}`)
+    if (apiConfig.enableLogging) {
+      console.log(`[schwabFetch] Fetching ${url.toString()}, method: ${method}`) // Use meta.method
+    }
     response = await fetch(url.toString(), requestInit)
-    console.log(
-      `[schwabFetch] Response status: ${response.status}, headers:`,
-      Object.fromEntries(
-        [...response.headers.entries()].filter(([k]) => ['content-type', 'x-rate-limit-remaining', 'x-rate-limit-reset'].includes(k)),
-      ),
-    )
+    if (apiConfig.enableLogging) {
+      console.log(
+        `[schwabFetch] Response status: ${response.status}, headers:`,
+        Object.fromEntries(
+          [...response.headers.entries()].filter(([k]) => ['content-type', 'x-rate-limit-remaining', 'x-rate-limit-reset'].includes(k)),
+        ),
+      )
+    }
   } catch (networkError: any) {
-    console.error(`[schwabFetch] Network error fetching ${url.toString()}:`, networkError)
+    if (apiConfig.enableLogging) {
+      console.error(`[schwabFetch] Network error fetching ${url.toString()}:`, networkError)
+    }
     throw new SchwabApiError(0, undefined, `Network error: ${networkError.message}`)
   }
 
-  // 9. Handle HTTP Errors
+  // 8. Handle HTTP Errors
   if (!response.ok) {
     let errorBodyText
     let errorBody
     try {
       errorBodyText = await response.text()
-      console.error(`[schwabFetch] Error response body: ${errorBodyText}`)
+      if (apiConfig.enableLogging) {
+        console.error(`[schwabFetch] Error response body: ${errorBodyText}`)
+      }
 
       // Try to parse as JSON if possible
       try {
@@ -210,12 +292,16 @@ export async function schwabFetch<T = any>(
       }
     } catch (readError) {
       errorBodyText = 'Failed to read error body'
-      console.error(`[schwabFetch] Error reading error response body:`, readError)
+      if (apiConfig.enableLogging) {
+        console.error(`[schwabFetch] Error reading error response body:`, readError)
+      }
     }
 
     // Check for specific error cases
     if (response.status === 401) {
-      console.error(`[schwabFetch] Authentication error (401): Token may be invalid or expired`)
+      if (apiConfig.enableLogging) {
+        console.error(`[schwabFetch] Authentication error (401): Token may be invalid or expired`)
+      }
       throw new SchwabApiError(
         response.status,
         errorBody,
@@ -224,7 +310,9 @@ export async function schwabFetch<T = any>(
     }
 
     if (response.status === 429) {
-      console.error(`[schwabFetch] Rate limit exceeded (429)`)
+      if (apiConfig.enableLogging) {
+        console.error(`[schwabFetch] Rate limit exceeded (429)`)
+      }
       // Try to get rate limit reset time
       const resetTime = response.headers.get('x-rate-limit-reset')
       const waitTime = resetTime ? new Date(resetTime).getTime() - Date.now() : 60000
@@ -240,29 +328,34 @@ export async function schwabFetch<T = any>(
     throw new SchwabApiError(response.status, errorBody, errorBody?.message || `API request failed with status: ${response.status}`)
   }
 
-  // 10. Process response
+  // 9. Process response (using meta.responseSchema)
   try {
     // First check if the response is empty
     const contentLength = response.headers.get('content-length')
 
     // Determine if response should be a collection based on the path
-    const isCollectionResponse =
-      finalEndpointPath.includes('accounts') || finalEndpointPath.includes('orders') || finalEndpointPath.includes('watchlists')
+    const isCollectionResponse = url.pathname.includes('accounts') || url.pathname.includes('orders') || url.pathname.includes('watchlists')
 
     // If explicitly empty (content-length is 0), return empty array for collections or null for singleton
     if (contentLength === '0') {
-      console.log(`[schwabFetch] Empty response (content-length: 0)`)
-      return (isCollectionResponse ? [] : null) as T
+      if (apiConfig.enableLogging) {
+        console.log(`[schwabFetch] Empty response (content-length: 0)`)
+      }
+      return (isCollectionResponse ? [] : null) as R
     }
 
     // Otherwise try to parse as JSON
     const jsonData = await response.json()
-    console.log(`[schwabFetch] Successfully parsed JSON response`)
+    if (apiConfig.enableLogging) {
+      console.log(`[schwabFetch] Successfully parsed JSON response`)
+    }
 
-    // Parse response based on schema
-    const parsedResponse = methodMetadata.responseSchema.safeParse(jsonData)
+    // Parse response based on meta.responseSchema
+    const parsedResponse = responseSchema.safeParse(jsonData) // Use meta.responseSchema
     if (!parsedResponse.success) {
-      console.error(`[schwabFetch] Invalid response schema:`, parsedResponse.error.format())
+      if (apiConfig.enableLogging) {
+        console.error(`[schwabFetch] Invalid response schema:`, parsedResponse.error.format())
+      }
       throw new SchwabApiError(
         response.status,
         { validationError: parsedResponse.error.format() },
@@ -270,10 +363,19 @@ export async function schwabFetch<T = any>(
       )
     }
 
-    // Return typed data
-    return parsedResponse.data as T
+    // Return typed data (type R inferred from meta.responseSchema)
+    return parsedResponse.data as R
   } catch (jsonError: any) {
-    console.error(`[schwabFetch] Error parsing JSON response:`, jsonError)
+    if (apiConfig.enableLogging) {
+      console.error(`[schwabFetch] Error parsing JSON response:`, jsonError)
+    }
     throw new SchwabApiError(response.status, undefined, `Failed to parse API response: ${jsonError.message}`)
   }
 }
+
+// Replace wildcard export
+// export * from '../../tools'
+
+// With selective exports
+// export { OrderStatus, OrderSide, OrderType, OrderDuration, type Order, type OrderRequest, type UserPreference } from '../../tools/schemas'
+// export { asAccountNumber, asOrderId, asTransactionId, type AccountNumber, type OrderId, type TransactionId } from '../../tools/types'

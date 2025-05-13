@@ -4,8 +4,7 @@ import { McpAgent } from 'agents/mcp'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { SchwabHandler } from './schwab-handler'
-import { schwabFetch } from './lib/schwabApi/http'
-import { getAccounts } from './lib/schwabApi/accounts'
+import { getAccounts, getOrders } from './lib/schwabApi/endpoints'
 
 // Context from the auth process, encrypted & stored in the auth token
 // and provided to the MyMCP as this.props
@@ -14,63 +13,6 @@ type Props = {
   email: string
   accessToken: string
 }
-
-// Zod schema for an individual position (simplified)
-const SchwabPositionSchema = z
-  .object({
-    shortQuantity: z.number().optional(),
-    averagePrice: z.number().optional(),
-    currentDayProfitLoss: z.number().optional(),
-    longQuantity: z.number().optional(),
-    agedQuantity: z.number().optional(),
-    instrument: z
-      .object({
-        cusip: z.string().optional(),
-        symbol: z.string().optional(),
-        description: z.string().optional(),
-        instrumentId: z.number().optional(),
-        type: z.string().optional(),
-        assetType: z.enum(['CASH_EQUIVALENT', 'EQUITY', 'FIXED_INCOME', 'MUTUAL_FUND', 'OPTION']).optional(),
-      })
-      .passthrough()
-      .optional(),
-    marketValue: z.number().optional(),
-  })
-  .passthrough()
-
-// Zod schema for balances (simplified, focusing on a few key fields)
-const SchwabBalancesSchema = z
-  .object({
-    availableFunds: z.number().optional(),
-    buyingPower: z.number().optional(),
-    cashBalance: z.number().optional(), // from initialBalances
-    accountValue: z.number().optional(), // from initialBalances
-    equity: z.number().optional(),
-    liquidationValue: z.number().optional(), // from initialBalances
-  })
-  .passthrough()
-
-// Zod schema for a single securities account
-const SchwabSecuritiesAccountSchema = z
-  .object({
-    accountNumber: z.string(),
-    isDayTrader: z.boolean().optional(),
-    isClosingOnlyRestricted: z.boolean().optional(),
-    positions: z.array(SchwabPositionSchema).optional(),
-    initialBalances: SchwabBalancesSchema.optional(),
-    currentBalances: SchwabBalancesSchema.optional(),
-    projectedBalances: SchwabBalancesSchema.optional(),
-  })
-  .passthrough()
-
-// Zod schema for the array of accounts
-const SchwabAccountsResponseSchema = z.array(
-  z
-    .object({
-      securitiesAccount: SchwabSecuritiesAccountSchema,
-    })
-    .passthrough(),
-)
 
 export class MyMCP extends McpAgent<Props, Env> {
   public props!: Props // Declare props to satisfy TypeScript
@@ -140,6 +82,34 @@ export class MyMCP extends McpAgent<Props, Env> {
           console.error('[MyMCP getSchwabAccounts] Error with schwabFetch:', error)
           return {
             content: [{ type: 'text', text: `An error occurred fetching Schwab accounts: ${error.message}` }],
+          }
+        }
+      },
+    )
+
+    // Added: Tool to get recent orders for an account
+    this.server.tool(
+      'getRecentOrders',
+      { accountNumber: z.string() }, // Pass the raw shape, not the Zod object instance
+      // Callback receives parsed args ({ accountNumber }) as the first param
+      async ({ accountNumber }: { accountNumber: string }) => {
+        const accessToken = this.props?.accessToken
+        if (!accessToken) {
+          return {
+            content: [{ type: 'text', text: 'Error: Access token not available. Authentication may be required.' }],
+          }
+        }
+
+        try {
+          const orders = await getOrders(accessToken, {
+            pathParams: { accountNumber },
+            queryParams: { maxResults: 10 }, // Fetch latest 10
+          })
+          return { content: [{ type: 'text', text: JSON.stringify(orders, null, 2) }] }
+        } catch (error: any) {
+          console.error(`[MyMCP getRecentOrders] Error fetching orders for account ${accountNumber}:`, error)
+          return {
+            content: [{ type: 'text', text: `An error occurred fetching orders: ${error.message}` }],
           }
         }
       },

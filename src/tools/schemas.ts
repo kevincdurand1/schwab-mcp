@@ -324,7 +324,7 @@ export const ServiceError = z.object({
 })
 
 const SecuritiesAccountBase = z.object({
-  type: z.enum(['CASH', 'MARGIN']),
+  type: z.string(),
   accountNumber: z.string(),
   roundTrips: z.number().int(),
   isDayTrader: z.boolean().default(false),
@@ -453,6 +453,14 @@ const CashAccount = SecuritiesAccountBase.extend({
 })
 
 export const SecuritiesAccount = z.discriminatedUnion('type', [MarginAccount, CashAccount])
+export type SecuritiesAccount = z.infer<typeof SecuritiesAccount>
+
+// New: Schema for GET /accounts query parameters
+export const AccountsQueryParamsSchema = z
+  .object({
+    fields: z.enum(['positions', 'balances']).optional(), // Allow 'positions' or 'balances'
+  })
+  .optional()
 
 const DateParam = z.object({
   date: z.string().datetime({ message: "Valid ISO-8601 format is : yyyy-MM-dd'T'HH:mm:ss.SSSZ" }),
@@ -486,6 +494,41 @@ const OrderLegCollection = z.object({
   divCapGains: divCapGains,
   toSymbol: z.string(),
 })
+
+// Order status enum
+export enum OrderStatus {
+  FILLED = 'FILLED',
+  WORKING = 'WORKING',
+  CANCELED = 'CANCELED',
+  REJECTED = 'REJECTED',
+  EXPIRED = 'EXPIRED',
+  QUEUED = 'QUEUED',
+  PENDING = 'PENDING',
+}
+
+// Order side enum
+export enum OrderSide {
+  BUY = 'BUY',
+  SELL = 'SELL',
+  BUY_TO_COVER = 'BUY_TO_COVER',
+  SELL_SHORT = 'SELL_SHORT',
+}
+
+// Order type enum
+export enum OrderType {
+  MARKET = 'MARKET',
+  LIMIT = 'LIMIT',
+  STOP = 'STOP',
+  STOP_LIMIT = 'STOP_LIMIT',
+}
+
+// Duration type enum
+export enum OrderDuration {
+  DAY = 'DAY',
+  GOOD_TILL_CANCEL = 'GOOD_TILL_CANCEL',
+  FILL_OR_KILL = 'FILL_OR_KILL',
+  IMMEDIATE_OR_CANCEL = 'IMMEDIATE_OR_CANCEL',
+}
 
 export const Order = z.object({
   session: session,
@@ -912,6 +955,22 @@ export const UserPreference = z.object({
 })
 export type UserPreference = z.infer<typeof UserPreference>
 
+// New: Schema for GET /accounts/{accountNumber}/orders query parameters
+export const OrdersQuerySchema = z
+  .object({
+    maxResults: z.number().int().optional(),
+    fromEnteredTime: z.string().datetime().optional(),
+    toEnteredTime: z.string().datetime().optional(),
+    status: status.optional(), // Using the existing 'status' enum schema
+  })
+  .optional()
+
+// New: Schema for path parameter {accountNumber}
+export const AccountNumberPathSchema = z.object({ accountNumber: z.string() })
+
+// New: Schema for Array of Order
+export const OrdersArraySchema = z.array(Order)
+
 // Define Transaction after its dependencies UserDetails and TransferItem
 export const Transaction = z.object({
   activityId: z.number().int(),
@@ -930,3 +989,15 @@ export const Transaction = z.object({
   activityType: z.enum(['ACTIVITY_CORRECTION', 'EXECUTION', 'ORDER_ACTION', 'TRANSFER', 'UNKNOWN']),
   transferItems: z.array(TransferItem),
 })
+
+// New: Schema for the wrapper object returned by GET /accounts
+const AccountWrapper = z.object({
+  securitiesAccount: SecuritiesAccount,
+  aggregatedBalance: z.object({
+    currentLiquidationValue: z.number(),
+    liquidationValue: z.number(),
+  }),
+})
+
+// New: Schema for Array of SecuritiesAccount (Updated)
+export const AccountsArraySchema = z.array(AccountWrapper)
