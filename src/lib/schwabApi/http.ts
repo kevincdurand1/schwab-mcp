@@ -9,14 +9,14 @@ import { z } from 'zod'
 // Shared primitives -------------------------------------------------
 
 // API configuration options
-export interface SchwabApiConfig {
+interface SchwabApiConfig {
   baseUrl: string
   environment: 'production' | 'sandbox'
   enableLogging?: boolean
 }
 
 // Default API configuration
-export const DEFAULT_API_CONFIG: SchwabApiConfig = {
+const DEFAULT_API_CONFIG: SchwabApiConfig = {
   baseUrl: 'https://api.schwabapi.com',
   environment: 'production',
   enableLogging: true,
@@ -45,7 +45,7 @@ export function configureSchwabApi(config: Partial<SchwabApiConfig>): void {
 }
 
 // --- Core Types ---
-export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'OPTIONS' | 'HEAD'
+type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'OPTIONS' | 'HEAD'
 
 // Define generic types for params/body/response based on schemas
 export type InferPathParams<S> = S extends ZodType<infer P> ? P : undefined
@@ -74,7 +74,7 @@ export interface EndpointMetadata<
 
 // --- SchwabFetch Options (Updated) ---
 // Adjusted: Generic parameters P, Q, B now represent the actual data types, not necessarily schemas
-export interface SchwabFetchRequestOptions<P = unknown, Q = unknown, B = unknown> {
+interface SchwabFetchRequestOptions<P = unknown, Q = unknown, B = unknown> {
   pathParams?: P
   queryParams?: Q
   body?: B
@@ -171,7 +171,7 @@ function buildUrl(endpointTemplate: string, pathParams?: Record<string, string |
  * @param requestOptions Options including path/query params, body, and minimal init overrides.
  * @returns A Promise resolving to the parsed data with type inferred from the schema.
  */
-export async function schwabFetch<P, Q, B, R, M extends HttpMethod>(
+async function schwabFetch<P, Q, B, R, M extends HttpMethod>(
   accessToken: string,
   // Accept the full metadata object
   meta: EndpointMetadata<ZodType<P> | undefined, ZodType<Q> | undefined, ZodType<B> | undefined, ZodType<R>, M>,

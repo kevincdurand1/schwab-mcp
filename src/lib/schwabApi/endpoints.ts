@@ -8,7 +8,7 @@ import {
   AccountNumberPathSchema,
   AccountsArraySchema,
   OrdersArraySchema,
-} from '../../tools/schemas'
+} from './schemas'
 
 // --- Get Accounts ---
 const getAccountsMeta = {

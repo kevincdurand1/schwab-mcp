@@ -149,7 +149,7 @@ export async function clientIdAlreadyApproved(request: Request, clientId: string
 /**
  * Configuration for the approval dialog
  */
-export interface ApprovalDialogOptions {
+interface ApprovalDialogOptions {
   /**
    * Client information to display in the approval dialog
    */
@@ -528,7 +528,7 @@ export function renderApprovalDialog(request: Request, options: ApprovalDialogOp
 /**
  * Result of parsing the approval form submission.
  */
-export interface ParsedApprovalResult {
+interface ParsedApprovalResult {
   /** The original state object passed through the form. */
   state: any
   /** Headers to set on the redirect response, including the Set-Cookie header. */

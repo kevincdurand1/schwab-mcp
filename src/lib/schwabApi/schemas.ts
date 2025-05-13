@@ -496,7 +496,7 @@ const OrderLegCollection = z.object({
 })
 
 // Order status enum
-export enum OrderStatus {
+enum OrderStatus {
   FILLED = 'FILLED',
   WORKING = 'WORKING',
   CANCELED = 'CANCELED',
@@ -507,7 +507,7 @@ export enum OrderStatus {
 }
 
 // Order side enum
-export enum OrderSide {
+enum OrderSide {
   BUY = 'BUY',
   SELL = 'SELL',
   BUY_TO_COVER = 'BUY_TO_COVER',
@@ -515,7 +515,7 @@ export enum OrderSide {
 }
 
 // Order type enum
-export enum OrderType {
+enum OrderType {
   MARKET = 'MARKET',
   LIMIT = 'LIMIT',
   STOP = 'STOP',
@@ -523,7 +523,7 @@ export enum OrderType {
 }
 
 // Duration type enum
-export enum OrderDuration {
+enum OrderDuration {
   DAY = 'DAY',
   GOOD_TILL_CANCEL = 'GOOD_TILL_CANCEL',
   FILL_OR_KILL = 'FILL_OR_KILL',
