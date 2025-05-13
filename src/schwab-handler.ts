@@ -1,18 +1,12 @@
 import type { AuthRequest, OAuthHelpers } from '@cloudflare/workers-oauth-provider'
 import { Hono, Context } from 'hono'
-import { fetchUpstreamAuthToken, getUpstreamAuthorizeUrl, Props } from './utils'
 import { clientIdAlreadyApproved, parseRedirectApproval, renderApprovalDialog } from './workers-oauth-utils'
-import { trader } from '@sudowealth/schwab-api'
-
-// Configure API for Sandbox environment (runs once when handler initializes)
-// configureSchwabApi(SANDBOX_API_CONFIG) // Commented out to use DEFAULT_API_CONFIG
-// console.log('[SchwabHandler] Schwab API configured for Sandbox environment.') // Commented out related log
+import { auth, trader } from '@sudowealth/schwab-api'
 
 const app = new Hono<{ Bindings: Env & { OAUTH_PROVIDER: OAuthHelpers } }>()
 
 app.get('/authorize', async (c) => {
   const oauthReqInfo = await c.env.OAUTH_PROVIDER.parseAuthRequest(c.req.raw)
-  // console.log('[SchwabHandler /authorize GET] Parsed oauthReqInfo:', oauthReqInfo)
   const { clientId } = oauthReqInfo
   if (!clientId) {
     console.error('[SchwabHandler /authorize GET] Invalid request: clientId is missing')
@@ -20,11 +14,9 @@ app.get('/authorize', async (c) => {
   }
 
   if (await clientIdAlreadyApproved(c.req.raw, oauthReqInfo.clientId, c.env.COOKIE_ENCRYPTION_KEY)) {
-    // console.log('[SchwabHandler /authorize GET] Client ID already approved, redirecting to Schwab.')
     return redirectToSchwab(c, oauthReqInfo)
   }
 
-  // console.log('[SchwabHandler /authorize GET] Client ID not approved, rendering approval dialog.')
   return renderApprovalDialog(c.req.raw, {
     client: await c.env.OAUTH_PROVIDER.lookupClient(clientId),
     server: {
@@ -37,7 +29,6 @@ app.get('/authorize', async (c) => {
 
 app.post('/authorize', async (c) => {
   const { state, headers } = await parseRedirectApproval(c.req.raw, c.env.COOKIE_ENCRYPTION_KEY)
-  // console.log('[SchwabHandler /authorize POST] Parsed approval state:', state)
   if (!state.oauthReqInfo) {
     console.error('[SchwabHandler /authorize POST] Invalid request: state.oauthReqInfo is missing')
     return c.text('Invalid request', 400)
@@ -48,21 +39,14 @@ app.post('/authorize', async (c) => {
 })
 
 async function redirectToSchwab(c: Context, oauthReqInfo: AuthRequest, headers: Record<string, string> = {}) {
-  // console.log('[SchwabHandler redirectToSchwab] Called with oauthReqInfo:', oauthReqInfo, 'and headers:', headers)
-  // Schwab OAuth 2.0 authorize endpoint (replace with actual endpoint if different)
-  const schwabAuthorizeUrl = 'https://api.schwabapi.com/v1/oauth/authorize'
   // Schwab scopes (replace with actual required scopes)
   const schwabScope = 'SchwabApi oauth2 read'
-
-  const location = getUpstreamAuthorizeUrl({
-    upstreamUrl: schwabAuthorizeUrl,
+  const location = auth.buildAuthorizeUrl({
     scope: schwabScope,
-    clientId: c.env.SCHWAB_CLIENT_ID, // Add SCHWAB_CLIENT_ID to your environment
+    clientId: c.env.SCHWAB_CLIENT_ID,
     redirectUri: new URL('/callback', c.req.raw.url).href,
     state: btoa(JSON.stringify(oauthReqInfo)),
-    // Schwab does not use hostedDomain
   })
-  // console.log('[SchwabHandler redirectToSchwab] Redirecting to location:', location)
 
   return new Response(null, {
     status: 302,
@@ -95,19 +79,24 @@ app.get('/callback', async (c) => {
   }
 
   // Schwab OAuth 2.0 token endpoint (replace with actual endpoint if different)
-  const schwabTokenUrl = 'https://api.schwabapi.com/v1/oauth/token'
+  const redirectUriFromCallback = new URL('/callback', c.req.url).href // Renamed to avoid conflict
+  let schwabTokenResponse
 
-  const [accessToken, schwabErrResponse] = await fetchUpstreamAuthToken({
-    upstreamUrl: schwabTokenUrl,
-    clientId: c.env.SCHWAB_CLIENT_ID, // Add SCHWAB_CLIENT_ID to your environment
-    clientSecret: c.env.SCHWAB_CLIENT_SECRET, // Add SCHWAB_CLIENT_SECRET to your environment
-    code,
-    redirectUri: new URL('/callback', c.req.url).href,
-    grantType: 'authorization_code',
-  })
-  if (schwabErrResponse) {
-    return schwabErrResponse
+  try {
+    schwabTokenResponse = await auth.exchangeCodeForToken({
+      clientId: c.env.SCHWAB_CLIENT_ID,
+      clientSecret: c.env.SCHWAB_CLIENT_SECRET,
+      code: code as string, // Ensure 'code' is not undefined here
+      redirectUri: redirectUriFromCallback, // Use the renamed variable
+    })
+  } catch (error: any) {
+    console.error('[SchwabHandler /callback] Token exchange failed:', error)
+
+    // Generic error for other cases
+    return c.text('Failed to exchange authorization code for token.', 500)
   }
+
+  const accessToken = schwabTokenResponse.access_token
 
   // Fetch the user info from Schwab
   try {
@@ -116,29 +105,17 @@ app.get('/callback', async (c) => {
     // Extract data based on the (now inferred) UserPreference schema
     let userIdFromSchwab: string
     let userNameFromSchwab: string = 'Schwab User' // Default name
-    const userEmailFromSchwab: string = '' // Email is not in the schema
 
-    if (userPreferenceData?.streamerInfo?.[0]?.schwabClientCustomerId) {
-      userIdFromSchwab = userPreferenceData.streamerInfo[0].schwabClientCustomerId
+    if (userPreferenceData?.streamerInfo?.[0]?.schwabClientCorrelId) {
+      userIdFromSchwab = userPreferenceData.streamerInfo[0].schwabClientCorrelId
+
+      userNameFromSchwab = `User ${userIdFromSchwab.substring(0, 8)}`
     } else {
-      // Fallback if schwabClientCustomerId is not available - this is less ideal
+      // Fallback if schwabClientCorrelId is not available - this is less ideal
       console.warn(
-        '[SchwabHandler /callback] streamerInfo.schwabClientCustomerId not found in UserPreference. Falling back to a temporary ID.',
+        '[SchwabHandler /callback] Relevant user identifier (e.g., streamerInfo[0].schwabClientCorrelId) not found in UserPreference. Falling back to a temporary ID.',
       )
       userIdFromSchwab = `schwabUser_${Date.now()}`
-    }
-
-    if (userPreferenceData?.accounts && Array.isArray(userPreferenceData.accounts)) {
-      // Explicitly type 'acc' based on the UserPreferenceAccount schema
-      const primaryAccount = userPreferenceData.accounts.find(
-        (acc: { primaryAccount?: boolean; nickName?: string }) => acc.primaryAccount === true,
-      )
-      if (primaryAccount && primaryAccount.nickName) {
-        userNameFromSchwab = primaryAccount.nickName
-      } else if (userPreferenceData.accounts.length > 0 && userPreferenceData.accounts[0].nickName) {
-        // Fallback to the first account's nickname if no primary or primary has no nickname
-        userNameFromSchwab = userPreferenceData.accounts[0].nickName
-      }
     }
 
     // Return back to the MCP client a new token
@@ -151,9 +128,8 @@ app.get('/callback', async (c) => {
       scope: oauthReqInfo.scope,
       props: {
         name: userNameFromSchwab, // Use the extracted/placeholder name
-        email: userEmailFromSchwab, // Use the extracted/placeholder email
         accessToken, // The Schwab access token
-      } as Props,
+      },
     })
 
     return Response.redirect(redirectTo)
