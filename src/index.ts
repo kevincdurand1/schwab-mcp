@@ -4,7 +4,7 @@ import { McpAgent } from 'agents/mcp'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { SchwabHandler } from './schwab-handler'
-import { getAccounts, getOrders } from './lib/schwabApi/endpoints'
+import { trader } from '@sudowealth/schwab-api'
 
 // Context from the auth process, encrypted & stored in the auth token
 // and provided to the MyMCP as this.props
@@ -58,7 +58,7 @@ export class MyMCP extends McpAgent<Props, Env> {
 
         try {
           console.log('[MyMCP getSchwabAccounts] Fetching accounts using schwabFetch')
-          const accounts = await getAccounts(accessToken, {
+          const accounts = await trader.accounts.getAccounts(accessToken, {
             queryParams: { fields: 'positions' },
           })
 
@@ -82,34 +82,6 @@ export class MyMCP extends McpAgent<Props, Env> {
           console.error('[MyMCP getSchwabAccounts] Error with schwabFetch:', error)
           return {
             content: [{ type: 'text', text: `An error occurred fetching Schwab accounts: ${error.message}` }],
-          }
-        }
-      },
-    )
-
-    // Added: Tool to get recent orders for an account
-    this.server.tool(
-      'getRecentOrders',
-      { accountNumber: z.string() }, // Pass the raw shape, not the Zod object instance
-      // Callback receives parsed args ({ accountNumber }) as the first param
-      async ({ accountNumber }: { accountNumber: string }) => {
-        const accessToken = this.props?.accessToken
-        if (!accessToken) {
-          return {
-            content: [{ type: 'text', text: 'Error: Access token not available. Authentication may be required.' }],
-          }
-        }
-
-        try {
-          const orders = await getOrders(accessToken, {
-            pathParams: { accountNumber },
-            queryParams: { maxResults: 10 }, // Fetch latest 10
-          })
-          return { content: [{ type: 'text', text: JSON.stringify(orders, null, 2) }] }
-        } catch (error: any) {
-          console.error(`[MyMCP getRecentOrders] Error fetching orders for account ${accountNumber}:`, error)
-          return {
-            content: [{ type: 'text', text: `An error occurred fetching orders: ${error.message}` }],
           }
         }
       },
