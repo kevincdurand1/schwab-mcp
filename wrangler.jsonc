@@ -3,35 +3,35 @@
  * https://developers.cloudflare.com/workers/wrangler/configuration/
  */
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "schwab-mcp",
-  "main": "src/index.ts",
-  "compatibility_date": "2025-03-10",
-  "compatibility_flags": ["nodejs_compat"],
-  "migrations": [
-    {
-      "new_sqlite_classes": ["MyMCP"],
-      "tag": "v1"
-    }
-  ],
-  "durable_objects": {
-    "bindings": [
-      {
-        "class_name": "MyMCP",
-        "name": "MCP_OBJECT"
-      }
-    ]
-  },
-  "kv_namespaces": [
-    {
-      "binding": "OAUTH_KV",
-      "id": "127dd0549d56440483682532b2a5bfca"
-    }
-  ],
-  "observability": {
-    "enabled": true
-  },
-  "dev": {
-    "port": 8788
-  }
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "schwab-mcp",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-03-10",
+	"compatibility_flags": ["nodejs_compat"],
+	"migrations": [
+		{
+			"new_sqlite_classes": ["MyMCP"],
+			"tag": "v1",
+		},
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"class_name": "MyMCP",
+				"name": "MCP_OBJECT",
+			},
+		],
+	},
+	"kv_namespaces": [
+		{
+			"binding": "OAUTH_KV",
+			"id": "127dd0549d56440483682532b2a5bfca",
+		},
+	],
+	"observability": {
+		"enabled": true,
+	},
+	"dev": {
+		"port": 8788,
+	},
 }

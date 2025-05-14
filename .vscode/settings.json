@@ -1,4 +1,11 @@
 {
+	"editor.codeActionsOnSave": ["source.fixAll.eslint"],
+	"eslint.validate": [
+		"javascript",
+		"javascriptreact",
+		"typescript",
+		"typescriptreact"
+	],
 	"files.associations": {
 		"wrangler.json": "jsonc"
 	}
