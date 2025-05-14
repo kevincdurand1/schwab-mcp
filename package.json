@@ -29,6 +29,7 @@
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "^0.0.5",
+    "@epic-web/invariant": "^1.0.0",
     "@modelcontextprotocol/sdk": "^1.11.1",
     "@sudowealth/schwab-api": "^1.0.3",
     "agents": "^0.0.80",

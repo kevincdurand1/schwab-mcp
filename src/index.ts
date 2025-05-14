@@ -5,6 +5,7 @@ import { trader } from '@sudowealth/schwab-api'
 import { McpAgent } from 'agents/mcp'
 import { z } from 'zod'
 import { SchwabHandler } from './schwab-handler'
+import { invariant } from '@epic-web/invariant'
 
 // Context from the auth process, encrypted & stored in the auth token
 // and provided to the MyMCP as this.props
@@ -52,20 +53,10 @@ export class MyMCP extends McpAgent<Props, Env> {
 			async (_args: {}, context: any) => {
 				// Access accessToken directly from the agent instance's props
 				const accessToken = this.props?.accessToken
-
-				if (!accessToken) {
-					console.error(
-						'[getSchwabAccounts] Error: Access token not available in this.props.',
-					)
-					return {
-						content: [
-							{
-								type: 'text',
-								text: 'Error: Access token not available. Authentication may be required.',
-							},
-						],
-					}
-				}
+				invariant(
+					accessToken,
+					'[getAccounts] Error: Access token not available in this.props.',
+				)
 
 				try {
 					console.log('[getAccounts] Fetching accounts')
@@ -111,20 +102,10 @@ export class MyMCP extends McpAgent<Props, Env> {
 			async (_args: {}, context: any) => {
 				// Access accessToken directly from the agent instance's props
 				const accessToken = this.props?.accessToken
-
-				if (!accessToken) {
-					console.error(
-						'[getAccountNumbers] Error: Access token not available in this.props.',
-					)
-					return {
-						content: [
-							{
-								type: 'text',
-								text: 'Error: Access token not available. Authentication may be required.',
-							},
-						],
-					}
-				}
+				invariant(
+					accessToken,
+					'[getAccountNumbers] Error: Access token not available in this.props.',
+				)
 
 				try {
 					console.log('[getAccountNumbers] Fetching accounts')
@@ -163,20 +144,10 @@ export class MyMCP extends McpAgent<Props, Env> {
 			async (_args: {}, context: any) => {
 				// Access accessToken directly from the agent instance's props
 				const accessToken = this.props?.accessToken
-
-				if (!accessToken) {
-					console.error(
-						'[getOrders] Error: Access token not available in this.props.',
-					)
-					return {
-						content: [
-							{
-								type: 'text',
-								text: 'Error: Access token not available. Authentication may be required.',
-							},
-						],
-					}
-				}
+				invariant(
+					accessToken,
+					'[getOrders] Error: Access token not available in this.props.',
+				)
 
 				try {
 					console.log('[getOrders] Fetching orders')
@@ -222,28 +193,18 @@ export class MyMCP extends McpAgent<Props, Env> {
 		)
 
 		this.server.tool(
-			'getSchwabTransactions',
+			'getTransactions',
 			{}, // Empty object for paramsSchemaOrAnnotations (no input args)
 			async (_args: {}, context: any) => {
 				// Access accessToken directly from the agent instance's props
 				const accessToken = this.props?.accessToken
-
-				if (!accessToken) {
-					console.error(
-						'[getSchwabTransactions] Error: Access token not available in this.props.',
-					)
-					return {
-						content: [
-							{
-								type: 'text',
-								text: 'Error: Access token not available. Authentication may be required.',
-							},
-						],
-					}
-				}
+				invariant(
+					accessToken,
+					'[getTransactions] Error: Access token not available in this.props.',
+				)
 
 				try {
-					console.log('[getSchwabAccounts] Fetching accounts')
+					console.log('[getTransactions] Fetching accounts')
 					const transactions =
 						await trader.transactions.getTransactions(accessToken)
 
