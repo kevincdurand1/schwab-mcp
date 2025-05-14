@@ -4,6 +4,7 @@ import defaultConfig from '@epic-web/config/eslint'
 export default [
 	...defaultConfig,
 	{
+		ignores: ['./.wrangler/**'],
 		rules: {
 			// we leave unused vars around for the exercises
 			'no-unused-vars': 'off',

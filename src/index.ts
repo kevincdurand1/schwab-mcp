@@ -1,67 +1,36 @@
 import OAuthProvider from '@cloudflare/workers-oauth-provider'
+import { invariant } from '@epic-web/invariant'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { trader } from '@sudowealth/schwab-api'
-// @ts-ignore
-import { McpAgent } from 'agents/mcp'
+import { OrdersQuerySchema } from '@sudowealth/schwab-api/schemas'
+import { DurableMCP } from 'workers-mcp'
 import { z } from 'zod'
 import { SchwabHandler } from './schwab-handler'
-import { invariant } from '@epic-web/invariant'
 
-// Context from the auth process, encrypted & stored in the auth token
-// and provided to the MyMCP as this.props
 type Props = {
 	name: string
 	email: string
 	accessToken: string
 }
 
-export class MyMCP extends McpAgent<Props, Env> {
-	public props!: Props // Declare props to satisfy TypeScript
-
+export class MyMCP extends DurableMCP<Props, Env> {
 	server = new McpServer({
-		name: 'Schwab OAuth Proxy Demo',
+		name: 'Schwab MCP',
 		version: '0.0.1',
 	})
 
-	constructor(state: DurableObjectState, env: Env) {
-		super(state, env)
-		// console.log('[constructor] Initialized. Env:', env) // Removed for cleanup
-		// Props are usually injected by the OAuthProvider wrapper after auth, not at initial construction.
-		// We are trying to find where they become available.
-	}
-
 	async init() {
 		this.server.tool(
-			'add',
-			{ a: z.number(), b: z.number() },
-			async ({ a, b }) => {
-				// console.log('[tool:add] this.props:', this.props); // Linter error: Property 'props' does not exist on type 'MyMCP'
-				// We need to find the correct way to access props within a tool or request handler.
-				// For now, we'll just perform the addition.
-				// console.log('[tool:add] Called with a:', a, 'b:', b); // Removed for cleanup
-				return {
-					content: [{ type: 'text', text: String(a + b) }],
-				}
-			},
-		)
-
-		// const getSchwabAccountsInputSchema = z.object({}); // Not strictly needed if we pass {} directly
-
-		this.server.tool(
 			'getAccounts',
-			{}, // Empty object for paramsSchemaOrAnnotations (no input args)
-			async (_args: {}, context: any) => {
-				// Access accessToken directly from the agent instance's props
-				const accessToken = this.props?.accessToken
-				invariant(
-					accessToken,
-					'[getAccounts] Error: Access token not available in this.props.',
-				)
+			{ showPositions: z.boolean().default(false) },
+			async ({ showPositions }) => {
+				const accessToken = this.props.accessToken
+				invariant(accessToken, '[getAccounts] Error: No access token.')
 
 				try {
 					console.log('[getAccounts] Fetching accounts')
 					const accounts = await trader.accounts.getAccounts(accessToken, {
-						queryParams: { fields: 'positions' },
+						queryParams: { fields: showPositions ? 'positions' : undefined },
 					})
 
 					if (accounts.length === 0) {
@@ -78,7 +47,6 @@ export class MyMCP extends McpAgent<Props, Env> {
 					return {
 						content: [
 							{ type: 'text', text: 'Successfully fetched Schwab accounts:' },
-							// Stringify JSON data and return as text, based on SDK examples
 							{ type: 'text', text: JSON.stringify(accountSummaries, null, 2) },
 						],
 					}
@@ -96,72 +64,52 @@ export class MyMCP extends McpAgent<Props, Env> {
 			},
 		)
 
-		this.server.tool(
-			'getAccountNumbers',
-			{}, // Empty object for paramsSchemaOrAnnotations (no input args)
-			async (_args: {}, context: any) => {
-				// Access accessToken directly from the agent instance's props
-				const accessToken = this.props?.accessToken
-				invariant(
-					accessToken,
-					'[getAccountNumbers] Error: Access token not available in this.props.',
-				)
+		this.server.tool('getAccountNumbers', {}, async (_args: {}) => {
+			const accessToken = this.props.accessToken
+			invariant(accessToken, '[getAccountNumbers] Error: No access token.')
 
-				try {
-					console.log('[getAccountNumbers] Fetching accounts')
-					const accounts = await trader.accounts.getAccountNumbers(accessToken)
-
-					if (accounts.length === 0) {
-						return {
-							content: [{ type: 'text', text: 'No Schwab accounts found.' }],
-						}
-					}
-
+			try {
+				const accounts = await trader.accounts.getAccountNumbers(accessToken)
+				if (accounts.length === 0) {
 					return {
-						content: [
-							{ type: 'text', text: 'Successfully fetched Schwab accounts:' },
-							// Stringify JSON data and return as text, based on SDK examples
-							{ type: 'text', text: JSON.stringify(accounts, null, 2) },
-						],
-					}
-				} catch (error: any) {
-					console.error('[getAccountNumbers] Error with schwabFetch:', error)
-					return {
-						content: [
-							{
-								type: 'text',
-								text: `An error occurred fetching Schwab accounts: ${error.message}`,
-							},
-						],
+						content: [{ type: 'text', text: 'No Schwab accounts found.' }],
 					}
 				}
-			},
-		)
+
+				return {
+					content: [
+						{ type: 'text', text: 'Successfully fetched Schwab accounts:' },
+						{ type: 'text', text: JSON.stringify(accounts, null, 2) },
+					],
+				}
+			} catch (error: any) {
+				console.error('[getAccountNumbers] Error with schwabFetch:', error)
+				return {
+					content: [
+						{
+							type: 'text',
+							text: `An error occurred fetching Schwab accounts: ${error.message}`,
+						},
+					],
+				}
+			}
+		})
 
 		this.server.tool(
 			'getOrders',
-			{}, // Empty object for paramsSchemaOrAnnotations (no input args)
-			async (_args: {}, context: any) => {
-				// Access accessToken directly from the agent instance's props
-				const accessToken = this.props?.accessToken
-				invariant(
-					accessToken,
-					'[getOrders] Error: Access token not available in this.props.',
-				)
+			OrdersQuerySchema.shape,
+			async ({ maxResults, fromEnteredTime, toEnteredTime, status }) => {
+				const accessToken = this.props.accessToken
+				invariant(accessToken, '[getOrders] Error: No access token.')
 
 				try {
 					console.log('[getOrders] Fetching orders')
-
-					// Calculate dynamic date range
-					const toDate = new Date()
-					const fromDate = new Date()
-					fromDate.setDate(toDate.getDate() - 60) // Example: last 60 days
-					const formatAsISO = (date: Date) => date.toISOString()
-
 					const orders = await trader.orders.getOrders(accessToken, {
 						queryParams: {
-							fromEnteredTime: formatAsISO(fromDate),
-							toEnteredTime: formatAsISO(toDate),
+							maxResults,
+							fromEnteredTime,
+							toEnteredTime,
+							status,
 						},
 					})
 
@@ -174,7 +122,6 @@ export class MyMCP extends McpAgent<Props, Env> {
 					return {
 						content: [
 							{ type: 'text', text: 'Successfully fetched Schwab orders:' },
-							// Stringify JSON data and return as text, based on SDK examples
 							{ type: 'text', text: JSON.stringify(orders, null, 2) },
 						],
 					}
@@ -196,12 +143,8 @@ export class MyMCP extends McpAgent<Props, Env> {
 			'getTransactions',
 			{}, // Empty object for paramsSchemaOrAnnotations (no input args)
 			async (_args: {}, context: any) => {
-				// Access accessToken directly from the agent instance's props
-				const accessToken = this.props?.accessToken
-				invariant(
-					accessToken,
-					'[getTransactions] Error: Access token not available in this.props.',
-				)
+				const accessToken = this.props.accessToken
+				invariant(accessToken, '[getTransactions] Error: No access token.')
 
 				try {
 					console.log('[getTransactions] Fetching accounts')

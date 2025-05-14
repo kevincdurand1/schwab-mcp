@@ -16,7 +16,7 @@ const ONE_YEAR_IN_SECONDS = 31536000
 function decodeState<T = any>(encoded: string): T {
 	try {
 		const jsonString = atob(encoded)
-		return JSON.parse(jsonString)
+		return JSON.parse(jsonString) as T
 	} catch (e) {
 		console.error('Error decoding state:', e)
 		throw new Error('Could not decode state')
@@ -120,10 +120,14 @@ async function getApprovedClientsFromCookie(
 	}
 
 	const [signatureHex, base64Payload] = parts
-	const payload = atob(base64Payload) // Assuming payload is base64 encoded JSON string
+	const payload = atob(base64Payload as string) // Assuming payload is base64 encoded JSON string
 
 	const key = await importKey(secret)
-	const isValid = await verifySignature(key, signatureHex, payload)
+	const isValid = await verifySignature(
+		key,
+		signatureHex as string,
+		payload as string,
+	)
 
 	if (!isValid) {
 		console.warn('Cookie signature verification failed.')
