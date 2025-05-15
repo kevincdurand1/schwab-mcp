@@ -1,7 +1,8 @@
-import { invariant } from '@epic-web/invariant'
 import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { trader } from '@sudowealth/schwab-api'
 import { z } from 'zod'
+import { logger } from '../../shared/logger'
+import { SchwabApiError, withToken } from '../utils'
 
 export function registerAccountTools(
 	server: McpServer,
@@ -10,13 +11,10 @@ export function registerAccountTools(
 	server.tool(
 		'getAccounts',
 		{ showPositions: z.boolean().default(false) },
-		async ({ showPositions }) => {
-			const accessToken = await getAccessToken()
-			invariant(accessToken, '[getAccounts] Error: No access token.')
-
+		withToken(getAccessToken, async (token, { showPositions }) => {
 			try {
-				console.log('[getAccounts] Fetching accounts')
-				const accounts = await trader.accounts.getAccounts(accessToken, {
+				logger.info('Fetching accounts', { showPositions })
+				const accounts = await trader.accounts.getAccounts(token, {
 					queryParams: { fields: showPositions ? 'positions' : undefined },
 				})
 
@@ -28,6 +26,7 @@ export function registerAccountTools(
 				const accountSummaries = accounts.map((acc: any) => ({
 					...acc.securitiesAccount,
 				}))
+				logger.debug('Successfully fetched accounts', { count: accounts.length })
 				return {
 					content: [
 						{ type: 'text', text: 'Successfully fetched Schwab accounts:' },
@@ -35,46 +34,41 @@ export function registerAccountTools(
 					],
 				}
 			} catch (error: any) {
-				console.error('[getAccounts] Error with schwabFetch:', error)
-				return {
-					content: [
-						{
-							type: 'text',
-							text: `An error occurred fetching Schwab accounts: ${error.message}`,
-						},
-					],
-				}
+				logger.error('Failed to fetch accounts', error)
+				throw new SchwabApiError(
+					error.status || 500,
+					`Failed to fetch accounts: ${error.message}`
+				)
 			}
-		},
+		}),
 	)
 
-	server.tool('getAccountNumbers', {}, async (_args: {}) => {
-		const accessToken = await getAccessToken()
-		invariant(accessToken, '[getAccountNumbers] Error: No access token.')
-
-		try {
-			const accounts = await trader.accounts.getAccountNumbers(accessToken)
-			if (accounts.length === 0) {
-				return {
-					content: [{ type: 'text', text: 'No Schwab accounts found.' }],
+	server.tool(
+		'getAccountNumbers',
+		{},
+		withToken(getAccessToken, async (token) => {
+			try {
+				logger.info('Fetching account numbers')
+				const accounts = await trader.accounts.getAccountNumbers(token)
+				if (accounts.length === 0) {
+					return {
+						content: [{ type: 'text', text: 'No Schwab accounts found.' }],
+					}
 				}
+				logger.debug('Successfully fetched account numbers', { count: accounts.length })
+				return {
+					content: [
+						{ type: 'text', text: 'Successfully fetched Schwab accounts:' },
+						{ type: 'text', text: JSON.stringify(accounts, null, 2) },
+					],
+				}
+			} catch (error: any) {
+				logger.error('Failed to fetch account numbers', error)
+				throw new SchwabApiError(
+					error.status || 500,
+					`Failed to fetch account numbers: ${error.message}`
+				)
 			}
-			return {
-				content: [
-					{ type: 'text', text: 'Successfully fetched Schwab accounts:' },
-					{ type: 'text', text: JSON.stringify(accounts, null, 2) },
-				],
-			}
-		} catch (error: any) {
-			console.error('[getAccountNumbers] Error with schwabFetch:', error)
-			return {
-				content: [
-					{
-						type: 'text',
-						text: `An error occurred fetching Schwab accounts: ${error.message}`,
-					},
-				],
-			}
-		}
-	})
+		}),
+	)
 }

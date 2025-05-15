@@ -3,6 +3,9 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
@@ -12,7 +15,7 @@
     "format": "prettier . --write",
     "lint": "eslint .",
     "typecheck": "tsc",
-    "validate": "run-p -l format lint typecheck"
+    "validate": "npm run typecheck && npm run lint"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250509.0",
@@ -31,8 +34,9 @@
     "@cloudflare/workers-oauth-provider": "^0.0.5",
     "@epic-web/invariant": "^1.0.0",
     "@modelcontextprotocol/sdk": "^1.11.1",
-    "@sudowealth/schwab-api": "^1.2.0-beta.17",
+    "@sudowealth/schwab-api": "^1.2.0-beta.19",
     "agents": "^0.0.80",
+    "async-mutex": "^0.5.0",
     "hono": "^4.7.9",
     "workers-mcp": "0.1.0-3",
     "zod": "^3.24.4"

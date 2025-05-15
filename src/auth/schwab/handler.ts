@@ -2,17 +2,16 @@ import {
 	type AuthRequest,
 	type OAuthHelpers,
 } from '@cloudflare/workers-oauth-provider'
-import { createAuthClient, trader } from '@sudowealth/schwab-api'
+import { trader } from '@sudowealth/schwab-api'
 import { Hono, type Context } from 'hono'
-import type { Env } from '../../types/env'
+import { logger } from '../../shared/logger'
+import  { type Env } from '../../types/env'
+import { createSchwabAuth } from '../schwabAuth'
 import {
 	clientIdAlreadyApproved,
 	parseRedirectApproval,
 	renderApprovalDialog,
 } from './cookies'
-
-// Store the access token directly for simplicity
-const tokenStore = new Map<string, string>()
 
 const app = new Hono<{ Bindings: Env & { OAUTH_PROVIDER: OAuthHelpers } }>()
 
@@ -20,9 +19,7 @@ app.get('/authorize', async (c) => {
 	const oauthReqInfo = await c.env.OAUTH_PROVIDER.parseAuthRequest(c.req.raw)
 	const { clientId } = oauthReqInfo
 	if (!clientId) {
-		console.error(
-			'[SchwabHandler /authorize GET] Invalid request: clientId is missing',
-		)
+		logger.error('Invalid request: clientId is missing', { path: '/authorize', method: 'GET' })
 		return c.text('Invalid request', 400)
 	}
 
@@ -52,13 +49,10 @@ app.post('/authorize', async (c) => {
 		c.env.COOKIE_ENCRYPTION_KEY,
 	)
 	if (!state.oauthReqInfo) {
-		console.error(
-			'[SchwabHandler /authorize POST] Invalid request: state.oauthReqInfo is missing',
-		)
+		logger.error('Invalid request: state.oauthReqInfo is missing', { path: '/authorize', method: 'POST' })
 		return c.text('Invalid request', 400)
 	}
 
-	// console.log('[SchwabHandler /authorize POST] Redirecting to Schwab with oauthReqInfo from approval:', state.oauthReqInfo)
 	return redirectToSchwab(c, state.oauthReqInfo, headers)
 })
 
@@ -67,21 +61,21 @@ async function redirectToSchwab(
 	oauthReqInfo: AuthRequest,
 	headers: Record<string, string> = {},
 ) {
-	// Create auth client
-	const auth = createAuthClient({
+	const redirectUri = new URL('/callback', c.req.raw.url).href
+	
+	// Get the authorization URL from the schwab-api library
+	// We need to access the underlying auth client directly for this
+	// Hacky but necessary since our SchwabAuth interface focuses on token operations
+	const schwabScope = ['SchwabApi', 'oauth2', 'read']
+	const authClient = require('@sudowealth/schwab-api').createAuthClient({
 		clientId: c.env.SCHWAB_CLIENT_ID,
 		clientSecret: c.env.SCHWAB_CLIENT_SECRET,
-		redirectUri: new URL('/callback', c.req.raw.url).href,
-		// Simplified token handling for demo - doesn't actually save anything
+		redirectUri,
 		save: async () => {},
 		load: async () => null,
 	})
-
-	// Generate the login URL
-	const schwabScope = ['SchwabApi', 'oauth2', 'read']
-
-	// Get the authorization URL (docs show it returns an object with authUrl)
-	const authResponse = auth.getAuthorizationUrl({
+	
+	const authResponse = authClient.getAuthorizationUrl({
 		scope: schwabScope,
 	})
 
@@ -112,38 +106,29 @@ app.get('/callback', async (c) => {
 		atob(c.req.query('state') as string),
 	) as AuthRequest
 	if (!oauthReqInfo.clientId) {
+		logger.error('Invalid state: clientId is missing', { path: '/callback' })
 		return c.text('Invalid state', 400)
 	}
 
 	// Exchange the code for an access token using the auth client
 	const code = c.req.query('code')
 	if (!code) {
+		logger.error('Missing code parameter', { path: '/callback' })
 		return c.text('Missing code', 400)
 	}
 
-	// Create auth client (same configuration as above)
-	const auth = createAuthClient({
-		clientId: c.env.SCHWAB_CLIENT_ID,
-		clientSecret: c.env.SCHWAB_CLIENT_SECRET,
-		redirectUri: new URL('/callback', c.req.raw.url).href,
-		// Simplified token handling for demo
-		save: async () => {},
-		load: async () => null,
-	})
+	// Use our SchwabAuth service
+	const redirectUri = new URL('/callback', c.req.raw.url).href
+	const auth = createSchwabAuth(c.env, redirectUri)
 
 	try {
 		// Exchange the code for tokens
-		const tokenSet = await auth.exchangeCodeForTokens({
-			code: code as string,
-		})
+		const tokenSet = await auth.exchangeCode(code as string)
 
 		if (!tokenSet || !tokenSet.accessToken) {
-			console.error('[SchwabHandler /callback] Failed to get tokens')
+			logger.error('Failed to get tokens', { path: '/callback' })
 			return c.text('Failed to get access token', 500)
 		}
-
-		// Store the token for future reference (not actually used in demo)
-		tokenStore.set('current', JSON.stringify(tokenSet))
 
 		// Fetch the user info from Schwab
 		try {
@@ -161,9 +146,7 @@ app.get('/callback', async (c) => {
 				userNameFromSchwab = `User ${userIdFromSchwab.substring(0, 8)}`
 			} else {
 				// Fallback if schwabClientCorrelId is not available
-				console.warn(
-					'[SchwabHandler /callback] Relevant user identifier not found in UserPreference. Falling back to a temporary ID.',
-				)
+				logger.warn('Relevant user identifier not found in UserPreference. Falling back to a temporary ID.', { path: '/callback' })
 				userIdFromSchwab = `schwabUser_${Date.now()}`
 			}
 
@@ -185,17 +168,14 @@ app.get('/callback', async (c) => {
 
 			return Response.redirect(redirectTo)
 		} catch (error) {
-			console.error(
-				`[SchwabHandler /callback] Failed to fetch user preferences:`,
-				error,
-			)
+			logger.error('Failed to fetch user preferences', { path: '/callback', error })
 			return c.text(
 				`Failed to fetch user preferences: ${error instanceof Error ? error.message : String(error)}`,
-				500,
+				500
 			)
 		}
 	} catch (error: any) {
-		console.error('[SchwabHandler /callback] Token exchange failed:', error)
+		logger.error('Token exchange failed', { path: '/callback', error })
 		return c.text('Failed to exchange authorization code for token.', 500)
 	}
 })

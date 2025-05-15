@@ -1,12 +1,206 @@
 import {
 	type ClientInfo,
 	type AuthRequest,
-} from '@cloudflare/workers-oauth-provider' // Adjust path if necessary
+} from '@cloudflare/workers-oauth-provider'
 
-const COOKIE_NAME = 'mcp-approved-clients'
+const MCP_APPROVAL = 'mcp-approved-clients'
 const ONE_YEAR_IN_SECONDS = 31536000
 
+// CSS for the approval dialog
+const APPROVAL_CSS = `
+/* Modern, responsive styling with system fonts */
+:root {
+  --primary-color: #0070f3;
+  --error-color: #f44336;
+  --border-color: #e5e7eb;
+  --text-color: #333;
+  --background-color: #fff;
+  --card-shadow: 0 8px 36px 8px rgba(0, 0, 0, 0.1);
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, 
+               Helvetica, Arial, sans-serif, "Apple Color Emoji", 
+               "Segoe UI Emoji", "Segoe UI Symbol";
+  line-height: 1.6;
+  color: var(--text-color);
+  background-color: #f9fafb;
+  margin: 0;
+  padding: 0;
+}
+
+.container {
+  max-width: 600px;
+  margin: 2rem auto;
+  padding: 1rem;
+}
+
+.precard {
+  padding: 2rem;
+  text-align: center;
+}
+
+.card {
+  background-color: var(--background-color);
+  border-radius: 8px;
+  box-shadow: var(--card-shadow);
+  padding: 2rem;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 1.5rem;
+}
+
+.logo {
+  width: 48px;
+  height: 48px;
+  margin-right: 1rem;
+  border-radius: 8px;
+  object-fit: contain;
+}
+
+.title {
+  margin: 0;
+  font-size: 1.3rem;
+  font-weight: 400;
+}
+
+.alert {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 400;
+  margin: 1rem 0;
+  text-align: center;
+}
+
+.description {
+  color: #555;
+}
+
+.client-info {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 1rem 1rem 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.client-name {
+  font-weight: 600;
+  font-size: 1.2rem;
+  margin: 0 0 0.5rem 0;
+}
+
+.client-detail {
+  display: flex;
+  margin-bottom: 0.5rem;
+  align-items: baseline;
+}
+
+.detail-label {
+  font-weight: 500;
+  min-width: 120px;
+}
+
+.detail-value {
+  font-family: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  word-break: break-all;
+}
+
+.detail-value a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+.detail-value.small {
+  font-size: 0.8em;
+}
+
+.external-link-icon {
+  font-size: 0.75em;
+  margin-left: 0.25rem;
+  vertical-align: super;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 1rem;
+  margin-top: 2rem;
+}
+
+.button {
+  padding: 0.75rem 1.5rem;
+  border-radius: 6px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  font-size: 1rem;
+}
+
+.button-primary {
+  background-color: var(--primary-color);
+  color: white;
+}
+
+.button-secondary {
+  background-color: transparent;
+  border: 1px solid var(--border-color);
+  color: var(--text-color);
+}
+
+/* Responsive adjustments */
+@media (max-width: 640px) {
+  .container {
+    margin: 1rem auto;
+    padding: 0.5rem;
+  }
+  
+  .card {
+    padding: 1.5rem;
+  }
+  
+  .client-detail {
+    flex-direction: column;
+  }
+  
+  .detail-label {
+    min-width: unset;
+    margin-bottom: 0.25rem;
+  }
+  
+  .actions {
+    flex-direction: column;
+  }
+  
+  .button {
+    width: 100%;
+  }
+}
+`
+
 // --- Helper Functions ---
+
+/**
+ * Converts an ArrayBuffer to a hex string
+ */
+function toHex(buffer: ArrayBuffer): string {
+  return Array.from(new Uint8Array(buffer))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+}
+
+/**
+ * Converts a hex string to an ArrayBuffer
+ */
+function fromHex(hexString: string): ArrayBuffer {
+  const bytes = new Uint8Array(
+    hexString.match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16))
+  )
+  return bytes.buffer
+}
 
 /**
  * Decodes a URL-safe base64 string back to its original data.
@@ -57,10 +251,7 @@ async function signData(key: CryptoKey, data: string): Promise<string> {
 		key,
 		enc.encode(data),
 	)
-	// Convert ArrayBuffer to hex string
-	return Array.from(new Uint8Array(signatureBuffer))
-		.map((b) => b.toString(16).padStart(2, '0'))
-		.join('')
+	return toHex(signatureBuffer)
 }
 
 /**
@@ -77,18 +268,13 @@ async function verifySignature(
 ): Promise<boolean> {
 	const enc = new TextEncoder()
 	try {
-		// Convert hex signature back to ArrayBuffer
-		const signatureBytes = new Uint8Array(
-			signatureHex.match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16)),
-		)
 		return await crypto.subtle.verify(
 			'HMAC',
 			key,
-			signatureBytes.buffer,
+			fromHex(signatureHex),
 			enc.encode(data),
 		)
 	} catch (e) {
-		// Handle errors during hex parsing or verification
 		console.error('Error verifying signature:', e)
 		return false
 	}
@@ -98,29 +284,29 @@ async function verifySignature(
  * Parses the signed cookie and verifies its integrity.
  * @param cookieHeader - The value of the Cookie header from the request.
  * @param secret - The secret key used for signing.
- * @returns A promise resolving to the list of approved client IDs if the cookie is valid, otherwise null.
+ * @returns A promise resolving to the list of approved client IDs if the cookie is valid, otherwise undefined.
  */
 async function getApprovedClientsFromCookie(
 	cookieHeader: string | null,
 	secret: string,
-): Promise<string[] | null> {
-	if (!cookieHeader) return null
+): Promise<string[] | undefined> {
+	if (!cookieHeader) return undefined
 
 	const cookies = cookieHeader.split(';').map((c) => c.trim())
-	const targetCookie = cookies.find((c) => c.startsWith(`${COOKIE_NAME}=`))
+	const targetCookie = cookies.find((c) => c.startsWith(`${MCP_APPROVAL}=`))
 
-	if (!targetCookie) return null
+	if (!targetCookie) return undefined
 
-	const cookieValue = targetCookie.substring(COOKIE_NAME.length + 1)
+	const cookieValue = targetCookie.substring(MCP_APPROVAL.length + 1)
 	const parts = cookieValue.split('.')
 
 	if (parts.length !== 2) {
 		console.warn('Invalid cookie format received.')
-		return null // Invalid format
+		return undefined
 	}
 
 	const [signatureHex, base64Payload] = parts
-	const payload = atob(base64Payload as string) // Assuming payload is base64 encoded JSON string
+	const payload = atob(base64Payload as string)
 
 	const key = await importKey(secret)
 	const isValid = await verifySignature(
@@ -131,24 +317,24 @@ async function getApprovedClientsFromCookie(
 
 	if (!isValid) {
 		console.warn('Cookie signature verification failed.')
-		return null // Signature invalid
+		return undefined
 	}
 
 	try {
 		const approvedClients = JSON.parse(payload)
 		if (!Array.isArray(approvedClients)) {
 			console.warn('Cookie payload is not an array.')
-			return null // Payload isn't an array
+			return undefined
 		}
 		// Ensure all elements are strings
 		if (!approvedClients.every((item) => typeof item === 'string')) {
 			console.warn('Cookie payload contains non-string elements.')
-			return null
+			return undefined
 		}
 		return approvedClients as string[]
 	} catch (e) {
 		console.error('Error parsing cookie payload:', e)
-		return null // JSON parsing failed
+		return undefined
 	}
 }
 
@@ -280,179 +466,7 @@ export function renderApprovalDialog(
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>${clientName} | Authorization Request</title>
-        <style>
-          /* Modern, responsive styling with system fonts */
-          :root {
-            --primary-color: #0070f3;
-            --error-color: #f44336;
-            --border-color: #e5e7eb;
-            --text-color: #333;
-            --background-color: #fff;
-            --card-shadow: 0 8px 36px 8px rgba(0, 0, 0, 0.1);
-          }
-          
-          body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, 
-                         Helvetica, Arial, sans-serif, "Apple Color Emoji", 
-                         "Segoe UI Emoji", "Segoe UI Symbol";
-            line-height: 1.6;
-            color: var(--text-color);
-            background-color: #f9fafb;
-            margin: 0;
-            padding: 0;
-          }
-          
-          .container {
-            max-width: 600px;
-            margin: 2rem auto;
-            padding: 1rem;
-          }
-          
-          .precard {
-            padding: 2rem;
-            text-align: center;
-          }
-          
-          .card {
-            background-color: var(--background-color);
-            border-radius: 8px;
-            box-shadow: var(--card-shadow);
-            padding: 2rem;
-          }
-          
-          .header {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin-bottom: 1.5rem;
-          }
-          
-          .logo {
-            width: 48px;
-            height: 48px;
-            margin-right: 1rem;
-            border-radius: 8px;
-            object-fit: contain;
-          }
-          
-          .title {
-            margin: 0;
-            font-size: 1.3rem;
-            font-weight: 400;
-          }
-          
-          .alert {
-            margin: 0;
-            font-size: 1.5rem;
-            font-weight: 400;
-            margin: 1rem 0;
-            text-align: center;
-          }
-          
-          .description {
-            color: #555;
-          }
-          
-          .client-info {
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
-            padding: 1rem 1rem 0.5rem;
-            margin-bottom: 1.5rem;
-          }
-          
-          .client-name {
-            font-weight: 600;
-            font-size: 1.2rem;
-            margin: 0 0 0.5rem 0;
-          }
-          
-          .client-detail {
-            display: flex;
-            margin-bottom: 0.5rem;
-            align-items: baseline;
-          }
-          
-          .detail-label {
-            font-weight: 500;
-            min-width: 120px;
-          }
-          
-          .detail-value {
-            font-family: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-            word-break: break-all;
-          }
-          
-          .detail-value a {
-            color: inherit;
-            text-decoration: underline;
-          }
-          
-          .detail-value.small {
-            font-size: 0.8em;
-          }
-          
-          .external-link-icon {
-            font-size: 0.75em;
-            margin-left: 0.25rem;
-            vertical-align: super;
-          }
-          
-          .actions {
-            display: flex;
-            justify-content: flex-end;
-            gap: 1rem;
-            margin-top: 2rem;
-          }
-          
-          .button {
-            padding: 0.75rem 1.5rem;
-            border-radius: 6px;
-            font-weight: 500;
-            cursor: pointer;
-            border: none;
-            font-size: 1rem;
-          }
-          
-          .button-primary {
-            background-color: var(--primary-color);
-            color: white;
-          }
-          
-          .button-secondary {
-            background-color: transparent;
-            border: 1px solid var(--border-color);
-            color: var(--text-color);
-          }
-          
-          /* Responsive adjustments */
-          @media (max-width: 640px) {
-            .container {
-              margin: 1rem auto;
-              padding: 0.5rem;
-            }
-            
-            .card {
-              padding: 1.5rem;
-            }
-            
-            .client-detail {
-              flex-direction: column;
-            }
-            
-            .detail-label {
-              min-width: unset;
-              margin-bottom: 0.25rem;
-            }
-            
-            .actions {
-              flex-direction: column;
-            }
-            
-            .button {
-              width: 100%;
-            }
-          }
-        </style>
+        <style>${APPROVAL_CSS}</style>
       </head>
       <body>
         <div class="container">
@@ -625,7 +639,7 @@ export async function parseRedirectApproval(
 	// Get existing approved clients
 	const cookieHeader = request.headers.get('Cookie')
 	const existingApprovedClients =
-		(await getApprovedClientsFromCookie(cookieHeader, cookieSecret)) || []
+		(await getApprovedClientsFromCookie(cookieHeader, cookieSecret)) ?? []
 
 	// Add the newly approved client ID (avoid duplicates)
 	const updatedApprovedClients = Array.from(
@@ -640,7 +654,7 @@ export async function parseRedirectApproval(
 
 	// Generate Set-Cookie header
 	const headers: Record<string, string> = {
-		'Set-Cookie': `${COOKIE_NAME}=${newCookieValue}; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=${ONE_YEAR_IN_SECONDS}`,
+		'Set-Cookie': `${MCP_APPROVAL}=${newCookieValue}; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=${ONE_YEAR_IN_SECONDS}`,
 	}
 
 	return { state, headers }
