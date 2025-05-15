@@ -2,13 +2,16 @@ import {
 	type AuthRequest,
 	type OAuthHelpers,
 } from '@cloudflare/workers-oauth-provider'
-import { auth, trader } from '@sudowealth/schwab-api'
+import { createAuthClient, trader } from '@sudowealth/schwab-api'
 import { Hono, type Context } from 'hono'
 import {
 	clientIdAlreadyApproved,
 	parseRedirectApproval,
 	renderApprovalDialog,
 } from './workers-oauth-utils'
+
+// Store the access token directly for simplicity
+const tokenStore = new Map<string, string>()
 
 const app = new Hono<{ Bindings: Env & { OAUTH_PROVIDER: OAuthHelpers } }>()
 
@@ -63,20 +66,33 @@ async function redirectToSchwab(
 	oauthReqInfo: AuthRequest,
 	headers: Record<string, string> = {},
 ) {
-	// Schwab scopes (replace with actual required scopes)
-	const schwabScope = 'SchwabApi oauth2 read'
-	const location = auth.buildAuthorizeUrl({
-		scope: schwabScope,
+	// Create auth client
+	const auth = createAuthClient({
 		clientId: c.env.SCHWAB_CLIENT_ID,
+		clientSecret: c.env.SCHWAB_CLIENT_SECRET,
 		redirectUri: new URL('/callback', c.req.raw.url).href,
-		state: btoa(JSON.stringify(oauthReqInfo)),
+		// Simplified token handling for demo - doesn't actually save anything
+		save: async () => {},
+		load: async () => null,
 	})
+
+	// Generate the login URL
+	const schwabScope = ['SchwabApi', 'oauth2', 'read']
+
+	// Get the authorization URL (docs show it returns an object with authUrl)
+	const authResponse = auth.getAuthorizationUrl({
+		scope: schwabScope,
+	})
+
+	// Need to manually add state parameter
+	const authUrl = new URL(authResponse.authUrl)
+	authUrl.searchParams.set('state', btoa(JSON.stringify(oauthReqInfo)))
 
 	return new Response(null, {
 		status: 302,
 		headers: {
 			...headers,
-			location: location,
+			location: authUrl.toString(),
 		},
 	})
 }
@@ -98,77 +114,87 @@ app.get('/callback', async (c) => {
 		return c.text('Invalid state', 400)
 	}
 
-	// Exchange the code for an access token
+	// Exchange the code for an access token using the auth client
 	const code = c.req.query('code')
 	if (!code) {
 		return c.text('Missing code', 400)
 	}
 
-	// Schwab OAuth 2.0 token endpoint (replace with actual endpoint if different)
-	const redirectUriFromCallback = new URL('/callback', c.req.url).href // Renamed to avoid conflict
-	let schwabTokenResponse
+	// Create auth client (same configuration as above)
+	const auth = createAuthClient({
+		clientId: c.env.SCHWAB_CLIENT_ID,
+		clientSecret: c.env.SCHWAB_CLIENT_SECRET,
+		redirectUri: new URL('/callback', c.req.raw.url).href,
+		// Simplified token handling for demo
+		save: async () => {},
+		load: async () => null,
+	})
 
 	try {
-		schwabTokenResponse = await auth.exchangeCodeForToken({
-			clientId: c.env.SCHWAB_CLIENT_ID,
-			clientSecret: c.env.SCHWAB_CLIENT_SECRET,
-			code: code as string, // Ensure 'code' is not undefined here
-			redirectUri: redirectUriFromCallback, // Use the renamed variable
+		// Exchange the code for tokens
+		const tokenSet = await auth.exchangeCodeForTokens({
+			code: code as string,
 		})
-	} catch (error: any) {
-		console.error('[SchwabHandler /callback] Token exchange failed:', error)
 
-		// Generic error for other cases
-		return c.text('Failed to exchange authorization code for token.', 500)
-	}
-
-	const accessToken = schwabTokenResponse.access_token
-
-	// Fetch the user info from Schwab
-	try {
-		const userPreferenceData =
-			await trader.userPreference.getUserPreference(accessToken)
-
-		// Extract data based on the (now inferred) UserPreference schema
-		let userIdFromSchwab: string
-		let userNameFromSchwab: string = 'Schwab User' // Default name
-
-		if (userPreferenceData?.streamerInfo?.[0]?.schwabClientCorrelId) {
-			userIdFromSchwab = userPreferenceData.streamerInfo[0].schwabClientCorrelId
-
-			userNameFromSchwab = `User ${userIdFromSchwab.substring(0, 8)}`
-		} else {
-			// Fallback if schwabClientCorrelId is not available - this is less ideal
-			console.warn(
-				'[SchwabHandler /callback] Relevant user identifier (e.g., streamerInfo[0].schwabClientCorrelId) not found in UserPreference. Falling back to a temporary ID.',
-			)
-			userIdFromSchwab = `schwabUser_${Date.now()}`
+		if (!tokenSet || !tokenSet.accessToken) {
+			console.error('[SchwabHandler /callback] Failed to get tokens')
+			return c.text('Failed to get access token', 500)
 		}
 
-		// Return back to the MCP client a new token
-		const { redirectTo } = await c.env.OAUTH_PROVIDER.completeAuthorization({
-			request: oauthReqInfo,
-			userId: userIdFromSchwab, // Use the extracted/placeholder ID
-			metadata: {
-				label: userNameFromSchwab, // Use the extracted/placeholder name
-			},
-			scope: oauthReqInfo.scope,
-			props: {
-				name: userNameFromSchwab, // Use the extracted/placeholder name
-				accessToken, // The Schwab access token
-			},
-		})
+		const accessToken = tokenSet.accessToken
 
-		return Response.redirect(redirectTo)
-	} catch (error) {
-		console.error(
-			`[SchwabHandler /callback] Failed to fetch user preferences:`,
-			error,
-		)
-		return c.text(
-			`Failed to fetch user preferences: ${error instanceof Error ? error.message : String(error)}`,
-			500,
-		)
+		// Store the token for future reference (not actually used in demo)
+		tokenStore.set('current', accessToken)
+
+		// Fetch the user info from Schwab
+		try {
+			const userPreferenceData =
+				await trader.userPreference.getUserPreference(accessToken)
+
+			// Extract data based on the UserPreference schema
+			let userIdFromSchwab: string
+			let userNameFromSchwab: string = 'Schwab User' // Default name
+
+			if (userPreferenceData?.streamerInfo?.[0]?.schwabClientCorrelId) {
+				userIdFromSchwab =
+					userPreferenceData.streamerInfo[0].schwabClientCorrelId
+				userNameFromSchwab = `User ${userIdFromSchwab.substring(0, 8)}`
+			} else {
+				// Fallback if schwabClientCorrelId is not available
+				console.warn(
+					'[SchwabHandler /callback] Relevant user identifier not found in UserPreference. Falling back to a temporary ID.',
+				)
+				userIdFromSchwab = `schwabUser_${Date.now()}`
+			}
+
+			// Return back to the MCP client a new token
+			const { redirectTo } = await c.env.OAUTH_PROVIDER.completeAuthorization({
+				request: oauthReqInfo,
+				userId: userIdFromSchwab,
+				metadata: {
+					label: userNameFromSchwab,
+				},
+				scope: oauthReqInfo.scope,
+				props: {
+					name: userNameFromSchwab,
+					accessToken, // The Schwab access token
+				},
+			})
+
+			return Response.redirect(redirectTo)
+		} catch (error) {
+			console.error(
+				`[SchwabHandler /callback] Failed to fetch user preferences:`,
+				error,
+			)
+			return c.text(
+				`Failed to fetch user preferences: ${error instanceof Error ? error.message : String(error)}`,
+				500,
+			)
+		}
+	} catch (error: any) {
+		console.error('[SchwabHandler /callback] Token exchange failed:', error)
+		return c.text('Failed to exchange authorization code for token.', 500)
 	}
 })
 
