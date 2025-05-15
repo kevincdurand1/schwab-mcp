@@ -1,7 +1,11 @@
 import { invariant } from '@epic-web/invariant'
 import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { marketData } from '@sudowealth/schwab-api'
-import { GetQuoteBySymbolIdRequestPathParamsSchema, GetQuoteBySymbolIdRequestQueryParamsSchema, GetQuotesRequestQueryParamsSchema } from '@sudowealth/schwab-api/schemas'
+import {
+	GetQuoteBySymbolIdRequestPathParamsSchema,
+	GetQuoteBySymbolIdRequestQueryParamsSchema,
+	GetQuotesRequestQueryParamsSchema,
+} from '@sudowealth/schwab-api/schemas'
 
 export function registerQuotesTools(
 	server: McpServer,
@@ -65,18 +69,18 @@ export function registerQuotesTools(
 			...GetQuoteBySymbolIdRequestPathParamsSchema.shape,
 			...GetQuoteBySymbolIdRequestQueryParamsSchema.shape,
 		},
-		async ({ symbolId, fields }) => {
+		async ({ symbol_id, fields }) => {
 			const accessToken = getAccessToken()
 			invariant(accessToken, '[getQuoteBySymbolId] Error: No access token.')
 
 			try {
 				console.log(
-					`[getQuoteBySymbolId] Fetching quote for symbol: ${symbolId} with fields: ${fields}`,
+					`[getQuoteBySymbolId] Fetching quote for symbol: ${symbol_id} with fields: ${fields}`,
 				)
 				const quoteData = await marketData.quotes.getQuoteBySymbolId(
 					accessToken,
 					{
-						pathParams: { symbolId },
+						pathParams: { symbol_id },
 						queryParams: { fields },
 					},
 				)
@@ -84,13 +88,13 @@ export function registerQuotesTools(
 				if (
 					!quoteData ||
 					Object.keys(quoteData).length === 0 ||
-					!quoteData[symbolId.toUpperCase()]
+					!quoteData[symbol_id.toUpperCase()]
 				) {
 					return {
 						content: [
 							{
 								type: 'text',
-								text: `No quote found for symbol: ${symbolId}.`,
+								text: `No quote found for symbol: ${symbol_id}.`,
 							},
 						],
 					}
@@ -100,11 +104,11 @@ export function registerQuotesTools(
 					content: [
 						{
 							type: 'text',
-							text: `Successfully fetched quote for ${symbolId}:`,
+							text: `Successfully fetched quote for ${symbol_id}:`,
 						},
 						{
 							type: 'text',
-							text: JSON.stringify(quoteData[symbolId.toUpperCase()], null, 2),
+							text: JSON.stringify(quoteData[symbol_id.toUpperCase()], null, 2),
 						},
 					],
 				}
@@ -114,7 +118,7 @@ export function registerQuotesTools(
 					content: [
 						{
 							type: 'text',
-							text: `An error occurred fetching quote for ${symbolId}: ${error.message}`,
+							text: `An error occurred fetching quote for ${symbol_id}: ${error.message}`,
 						},
 					],
 				}

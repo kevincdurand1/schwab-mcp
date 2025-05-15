@@ -16,17 +16,17 @@ export function registerMoversTools(
 			...GetMoversRequestQueryParamsSchema.shape,
 			...GetMoversRequestPathParamsSchema.shape,
 		},
-		async ({ symbolId, sort, frequency }) => {
+		async ({ symbol_id, sort, frequency }) => {
 			const accessToken = getAccessToken()
 			invariant(accessToken, '[getMovers] Error: No access token.')
 
 			try {
 				console.log(
-					`[getMovers] Fetching movers for symbol: ${symbolId} ${sort ? `sorted by: ${sort}` : ''} ${frequency !== undefined ? `with frequency: ${frequency}` : ''}`,
+					`[getMovers] Fetching movers for symbol: ${symbol_id} ${sort ? `sorted by: ${sort}` : ''} ${frequency !== undefined ? `with frequency: ${frequency}` : ''}`,
 				)
 
 				const movers = await marketData.movers.getMovers(accessToken, {
-					pathParams: { symbolId },
+					pathParams: { symbol_id },
 					queryParams: { sort, frequency },
 				})
 
@@ -35,7 +35,7 @@ export function registerMoversTools(
 						content: [
 							{
 								type: 'text',
-								text: `No movers found for symbol: ${symbolId}.`,
+								text: `No movers found for symbol: ${symbol_id}.`,
 							},
 						],
 					}
@@ -45,7 +45,7 @@ export function registerMoversTools(
 					content: [
 						{
 							type: 'text',
-							text: `Successfully fetched movers for ${symbolId}:`,
+							text: `Successfully fetched movers for ${symbol_id}:`,
 						},
 						{
 							type: 'text',
@@ -59,7 +59,7 @@ export function registerMoversTools(
 					content: [
 						{
 							type: 'text',
-							text: `An error occurred fetching movers for ${symbolId}: ${error.message}`,
+							text: `An error occurred fetching movers for ${symbol_id}: ${error.message}`,
 						},
 					],
 				}

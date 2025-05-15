@@ -71,7 +71,7 @@ export function registerMarketHoursTools(
 			...GetMarketHoursByMarketIdRequestQueryParamsSchema.shape,
 			...GetMarketHoursByMarketIdRequestPathParamsSchema.shape,
 		},
-		async ({ marketId, date }) => {
+		async ({ market_id, date }) => {
 			const accessToken = getAccessToken()
 			invariant(
 				accessToken,
@@ -80,12 +80,12 @@ export function registerMarketHoursTools(
 
 			try {
 				console.log(
-					`[getMarketHoursByMarketId] Fetching market hours for market: ${marketId} ${date ? `on date: ${date}` : ''}`,
+					`[getMarketHoursByMarketId] Fetching market hours for market: ${market_id} ${date ? `on date: ${date}` : ''}`,
 				)
 
 				const hours = await marketData.marketHours.getMarketHoursByMarketId(
 					accessToken,
-					{ pathParams: { marketId }, queryParams: { date } },
+					{ pathParams: { market_id }, queryParams: { date } },
 				)
 
 				if (!hours) {
@@ -94,7 +94,7 @@ export function registerMarketHoursTools(
 						content: [
 							{
 								type: 'text',
-								text: `No market hours found for market ID: ${marketId} ${date ? `on date: ${date}` : ''}.`,
+								text: `No market hours found for market ID: ${market_id} ${date ? `on date: ${date}` : ''}.`,
 							},
 						],
 					}
@@ -104,7 +104,7 @@ export function registerMarketHoursTools(
 					content: [
 						{
 							type: 'text',
-							text: `Successfully fetched market hours for ${marketId}:`,
+							text: `Successfully fetched market hours for ${market_id}:`,
 						},
 						{ type: 'text', text: JSON.stringify(hours, null, 2) },
 					],
@@ -118,7 +118,7 @@ export function registerMarketHoursTools(
 					content: [
 						{
 							type: 'text',
-							text: `An error occurred fetching market hours for ${marketId}: ${error.message}`,
+							text: `An error occurred fetching market hours for ${market_id}: ${error.message}`,
 						},
 					],
 				}
