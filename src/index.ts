@@ -1,17 +1,19 @@
 import OAuthProvider from '@cloudflare/workers-oauth-provider'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { DurableMCP } from 'workers-mcp'
+import { SchwabHandler } from './auth/oauth/handler'
 import { TokenManager } from './auth/tokenManager'
-import { SchwabHandler } from './schwab-handler'
-import { registerAccountTools } from './tools/accounts'
-import { registerInstrumentTools } from './tools/instruments'
-import { registerMarketHoursTools } from './tools/marketHours'
-import { registerMoversTools } from './tools/movers'
-import { registerOptionsTools } from './tools/options'
-import { registerOrderTools } from './tools/orders'
-import { registerPriceHistoryTools } from './tools/priceHistory'
-import { registerQuotesTools } from './tools/quotes'
-import { registerTransactionTools } from './tools/transactions'
+import {
+	registerAccountTools,
+	registerInstrumentTools,
+	registerMarketHoursTools,
+	registerMoversTools,
+	registerOptionsTools,
+	registerOrderTools,
+	registerPriceHistoryTools,
+	registerQuotesTools,
+	registerTransactionTools,
+} from './tools'
 
 type Props = {
 	name: string

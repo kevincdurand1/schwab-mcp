@@ -4,11 +4,12 @@ import {
 } from '@cloudflare/workers-oauth-provider'
 import { createAuthClient, trader } from '@sudowealth/schwab-api'
 import { Hono, type Context } from 'hono'
+import type { Env } from '../../types/env'
 import {
 	clientIdAlreadyApproved,
 	parseRedirectApproval,
 	renderApprovalDialog,
-} from './workers-oauth-utils'
+} from './cookies'
 
 // Store the access token directly for simplicity
 const tokenStore = new Map<string, string>()
