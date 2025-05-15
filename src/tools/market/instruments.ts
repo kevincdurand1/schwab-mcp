@@ -1,25 +1,24 @@
-import { invariant } from '@epic-web/invariant'
 import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { marketData } from '@sudowealth/schwab-api'
 import { GetInstrumentsRequestQueryParamsSchema } from '@sudowealth/schwab-api/schemas'
+import { logger } from '../../shared/logger'
+import { schwabTool } from '../utils'
 
 export function registerInstrumentTools(
 	server: McpServer,
-	getAccessToken: () => Promise<string>,
+	getAccessToken: () => Promise<string>
 ) {
 	server.tool(
 		'searchInstruments',
 		GetInstrumentsRequestQueryParamsSchema.shape,
-		async ({ symbol, projection }) => {
-			const accessToken = await getAccessToken()
-			invariant(accessToken, '[searchInstruments] Error: No access token.')
-
-			try {
-				console.log(
-					`[searchInstruments] Fetching instrument for symbol: ${symbol} with projection: ${projection}`,
-				)
+		schwabTool(
+			getAccessToken,
+			GetInstrumentsRequestQueryParamsSchema,
+			async (token, { symbol, projection }) => {
+				logger.info('[searchInstruments] Fetching instruments', { symbol, projection })
+				
 				const instruments = await marketData.instruments.getInstruments(
-					accessToken,
+					token,
 					{
 						queryParams: { symbol, projection },
 					},
@@ -39,6 +38,12 @@ export function registerInstrumentTools(
 					}
 				}
 
+				const instrumentCount = Array.isArray(instruments) ? instruments.length : 1
+				logger.debug('[searchInstruments] Successfully fetched instruments', { 
+					symbol, 
+					count: instrumentCount 
+				})
+				
 				return {
 					content: [
 						{
@@ -48,17 +53,7 @@ export function registerInstrumentTools(
 						{ type: 'text', text: JSON.stringify(instruments, null, 2) },
 					],
 				}
-			} catch (error: any) {
-				console.error('[searchInstruments] Error with Schwab API:', error)
-				return {
-					content: [
-						{
-							type: 'text',
-							text: `An error occurred fetching instruments: ${error.message}`,
-						},
-					],
-				}
 			}
-		},
+		)
 	)
 }

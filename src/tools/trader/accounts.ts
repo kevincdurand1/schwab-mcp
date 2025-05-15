@@ -2,17 +2,27 @@ import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { trader } from '@sudowealth/schwab-api'
 import { z } from 'zod'
 import { logger } from '../../shared/logger'
-import { SchwabApiError, withToken } from '../utils'
+import { schwabTool } from '../utils'
+
+// Define schema for getAccounts
+const GetAccountsSchema = z.object({
+  showPositions: z.boolean().default(false)
+})
+
+// Define schema for getAccountNumbers (empty schema)
+const GetAccountNumbersSchema = z.object({})
 
 export function registerAccountTools(
 	server: McpServer,
-	getAccessToken: () => Promise<string>,
+	getAccessToken: () => Promise<string>
 ) {
 	server.tool(
 		'getAccounts',
 		{ showPositions: z.boolean().default(false) },
-		withToken(getAccessToken, async (token, { showPositions }) => {
-			try {
+		schwabTool(
+			getAccessToken,
+			GetAccountsSchema,
+			async (token, { showPositions }) => {
 				logger.info('Fetching accounts', { showPositions })
 				const accounts = await trader.accounts.getAccounts(token, {
 					queryParams: { fields: showPositions ? 'positions' : undefined },
@@ -33,21 +43,17 @@ export function registerAccountTools(
 						{ type: 'text', text: JSON.stringify(accountSummaries, null, 2) },
 					],
 				}
-			} catch (error: any) {
-				logger.error('Failed to fetch accounts', error)
-				throw new SchwabApiError(
-					error.status || 500,
-					`Failed to fetch accounts: ${error.message}`
-				)
 			}
-		}),
+		)
 	)
 
 	server.tool(
 		'getAccountNumbers',
 		{},
-		withToken(getAccessToken, async (token) => {
-			try {
+		schwabTool(
+			getAccessToken,
+			GetAccountNumbersSchema,
+			async (token) => {
 				logger.info('Fetching account numbers')
 				const accounts = await trader.accounts.getAccountNumbers(token)
 				if (accounts.length === 0) {
@@ -62,13 +68,8 @@ export function registerAccountTools(
 						{ type: 'text', text: JSON.stringify(accounts, null, 2) },
 					],
 				}
-			} catch (error: any) {
-				logger.error('Failed to fetch account numbers', error)
-				throw new SchwabApiError(
-					error.status || 500,
-					`Failed to fetch account numbers: ${error.message}`
-				)
 			}
-		}),
+		)
 	)
 }
+

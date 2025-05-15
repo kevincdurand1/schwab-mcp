@@ -204,12 +204,26 @@ function fromHex(hexString: string): ArrayBuffer {
 
 /**
  * Decodes a URL-safe base64 string back to its original data.
+ * Safely handles base64 decoding before attempting to parse JSON.
+ * 
  * @param encoded - The URL-safe base64 encoded string.
  * @returns The original data.
  */
 function decodeState<T = any>(encoded: string): T {
 	try {
-		const jsonString = atob(encoded)
+		// Step 1: Safe base64 decode to binary string
+		const binaryString = atob(encoded)
+		
+		// Step 2: Convert to Uint8Array for safer handling
+		const bytes = new Uint8Array(binaryString.length)
+		for (let i = 0; i < binaryString.length; i++) {
+			bytes[i] = binaryString.charCodeAt(i)
+		}
+		
+		// Step 3: Convert back to string for JSON parsing
+		const jsonString = new TextDecoder().decode(bytes)
+		
+		// Step 4: Parse JSON
 		return JSON.parse(jsonString) as T
 	} catch (e) {
 		console.error('Error decoding state:', e)
@@ -306,13 +320,31 @@ async function getApprovedClientsFromCookie(
 	}
 
 	const [signatureHex, base64Payload] = parts
-	const payload = atob(base64Payload as string)
-
+	
+	// Step 1: Safe base64 decode to Uint8Array (no JSON.parse yet)
+	let decodedBytes: Uint8Array
+	try {
+		// First convert base64 to string representation of binary data
+		const binaryString = atob(base64Payload as string)
+		// Then convert to actual Uint8Array
+		decodedBytes = new Uint8Array(binaryString.length)
+		for (let i = 0; i < binaryString.length; i++) {
+			decodedBytes[i] = binaryString.charCodeAt(i)
+		}
+	} catch (e) {
+		console.warn('Invalid base64 payload in cookie:', e)
+		return undefined
+	}
+	
+	// Convert Uint8Array back to string for signature verification
+	const payloadString = new TextDecoder().decode(decodedBytes)
+	
+	// Step 2: Verify HMAC signature on raw bytes before parsing JSON
 	const key = await importKey(secret)
 	const isValid = await verifySignature(
 		key,
 		signatureHex as string,
-		payload as string,
+		payloadString,
 	)
 
 	if (!isValid) {
@@ -320,8 +352,9 @@ async function getApprovedClientsFromCookie(
 		return undefined
 	}
 
+	// Step 3: JSON.parse only after signature passes
 	try {
-		const approvedClients = JSON.parse(payload)
+		const approvedClients = JSON.parse(payloadString)
 		if (!Array.isArray(approvedClients)) {
 			console.warn('Cookie payload is not an array.')
 			return undefined

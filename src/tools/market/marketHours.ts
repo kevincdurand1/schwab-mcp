@@ -1,4 +1,3 @@
-import { invariant } from '@epic-web/invariant'
 import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { marketData } from '@sudowealth/schwab-api'
 import {
@@ -6,28 +5,38 @@ import {
 	GetMarketHoursByMarketIdRequestQueryParamsSchema,
 	GetMarketHoursRequestQueryParamsSchema,
 } from '@sudowealth/schwab-api/schemas'
+import { z } from 'zod'
+import { logger } from '../../shared/logger'
+import { mergeShapes, schwabTool } from '../utils'
+
+// Create combined schema for getMarketHoursByMarketId
+const GetMarketHoursByMarketIdSchema = z.object(mergeShapes(
+	GetMarketHoursByMarketIdRequestQueryParamsSchema.shape,
+	GetMarketHoursByMarketIdRequestPathParamsSchema.shape
+))
 
 export function registerMarketHoursTools(
 	server: McpServer,
-	getAccessToken: () => Promise<string>,
+	getAccessToken: () => Promise<string>
 ) {
 	server.tool(
 		'getMarketHours',
 		GetMarketHoursRequestQueryParamsSchema.shape,
-		async ({ markets, date }) => {
-			const accessToken = await getAccessToken()
-			invariant(accessToken, '[getMarketHours] Error: No access token.')
-
-			try {
+		schwabTool(
+			getAccessToken,
+			GetMarketHoursRequestQueryParamsSchema,
+			async (token: string, { markets, date }: z.infer<typeof GetMarketHoursRequestQueryParamsSchema>) => {
 				const queryParams = {
 					markets: Array.isArray(markets) ? markets : [markets],
 					date,
 				}
-				console.log(
-					`[getMarketHours] Fetching market hours for markets: ${queryParams.markets.join(',')} ${date ? `on date: ${date}` : ''}`,
-				)
+				
+				logger.info('[getMarketHours] Fetching market hours', { 
+					markets: queryParams.markets.join(','), 
+					date
+				})
 
-				const hours = await marketData.marketHours.getMarketHours(accessToken, {
+				const hours = await marketData.marketHours.getMarketHours(token, {
 					queryParams,
 				})
 
@@ -42,6 +51,10 @@ export function registerMarketHoursTools(
 					}
 				}
 
+				logger.debug('[getMarketHours] Successfully fetched market hours', { 
+					marketCount: Object.keys(hours).length 
+				})
+				
 				return {
 					content: [
 						{
@@ -51,18 +64,8 @@ export function registerMarketHoursTools(
 						{ type: 'text', text: JSON.stringify(hours, null, 2) },
 					],
 				}
-			} catch (error: any) {
-				console.error('[getMarketHours] Error with Schwab API:', error)
-				return {
-					content: [
-						{
-							type: 'text',
-							text: `An error occurred fetching market hours: ${error.message}`,
-						},
-					],
-				}
 			}
-		},
+		)
 	)
 
 	server.tool(
@@ -71,20 +74,17 @@ export function registerMarketHoursTools(
 			...GetMarketHoursByMarketIdRequestQueryParamsSchema.shape,
 			...GetMarketHoursByMarketIdRequestPathParamsSchema.shape,
 		},
-		async ({ market_id, date }) => {
-			const accessToken = await getAccessToken()
-			invariant(
-				accessToken,
-				'[getMarketHoursByMarketId] Error: No access token.',
-			)
-
-			try {
-				console.log(
-					`[getMarketHoursByMarketId] Fetching market hours for market: ${market_id} ${date ? `on date: ${date}` : ''}`,
-				)
+		schwabTool(
+			getAccessToken,
+			GetMarketHoursByMarketIdSchema,
+			async (token: string, { market_id, date }: z.infer<typeof GetMarketHoursByMarketIdSchema>) => {
+				logger.info('[getMarketHoursByMarketId] Fetching market hours', { 
+					market_id, 
+					date 
+				})
 
 				const hours = await marketData.marketHours.getMarketHoursByMarketId(
-					accessToken,
+					token,
 					{ pathParams: { market_id }, queryParams: { date } },
 				)
 
@@ -100,6 +100,10 @@ export function registerMarketHoursTools(
 					}
 				}
 
+				logger.debug('[getMarketHoursByMarketId] Successfully fetched market hours', { 
+					market_id 
+				})
+				
 				return {
 					content: [
 						{
@@ -109,20 +113,7 @@ export function registerMarketHoursTools(
 						{ type: 'text', text: JSON.stringify(hours, null, 2) },
 					],
 				}
-			} catch (error: any) {
-				console.error(
-					'[getMarketHoursByMarketId] Error with Schwab API:',
-					error,
-				)
-				return {
-					content: [
-						{
-							type: 'text',
-							text: `An error occurred fetching market hours for ${market_id}: ${error.message}`,
-						},
-					],
-				}
 			}
-		},
+		)
 	)
 }

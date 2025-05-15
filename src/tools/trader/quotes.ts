@@ -1,4 +1,3 @@
-import { invariant } from '@epic-web/invariant'
 import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { marketData } from '@sudowealth/schwab-api'
 import {
@@ -6,6 +5,15 @@ import {
 	GetQuoteBySymbolIdRequestQueryParamsSchema,
 	GetQuotesRequestQueryParamsSchema,
 } from '@sudowealth/schwab-api/schemas'
+import { z } from 'zod'
+import { logger } from '../../shared/logger'
+import { mergeShapes, schwabTool } from '../utils'
+
+// Create combined schema for getQuoteBySymbolId
+const GetQuoteBySymbolIdSchema = z.object(mergeShapes(
+	GetQuoteBySymbolIdRequestPathParamsSchema.shape,
+	GetQuoteBySymbolIdRequestQueryParamsSchema.shape
+))
 
 export function registerQuotesTools(
 	server: McpServer,
@@ -14,53 +22,45 @@ export function registerQuotesTools(
 	server.tool(
 		'getQuotes',
 		GetQuotesRequestQueryParamsSchema.shape,
-		async ({ symbols, fields, indicative }) => {
-			const accessToken = await getAccessToken()
-			invariant(accessToken, '[getQuotes] Error: No access token.')
+		schwabTool(
+			getAccessToken,
+			GetQuotesRequestQueryParamsSchema,
+			async (token, { symbols, fields, indicative }) => {
+			logger.info('[getQuotes] Fetching quotes', { symbols, fields })
+			
+			const quotesData = await marketData.quotes.getQuotes(token, {
+				queryParams: { symbols, fields, indicative },
+			})
 
-			try {
-				console.log(
-					`[getQuotes] Fetching quotes for symbols: ${symbols} with fields: ${fields}`,
-				)
-				const quotesData = await marketData.quotes.getQuotes(accessToken, {
-					queryParams: { symbols, fields, indicative },
-				})
-
-				if (Object.keys(quotesData).length === 0) {
-					return {
-						content: [
-							{
-								type: 'text',
-								text: `No quotes found for symbols: ${symbols}.`,
-							},
-						],
-					}
-				}
-
+			if (Object.keys(quotesData).length === 0) {
 				return {
 					content: [
 						{
 							type: 'text',
-							text: `Successfully fetched quotes for ${symbols}:`,
-						},
-						{
-							type: 'text',
-							text: JSON.stringify(quotesData, null, 2),
-						},
-					],
-				}
-			} catch (error: any) {
-				console.error('[getQuotes] Error with Schwab API:', error)
-				return {
-					content: [
-						{
-							type: 'text',
-							text: `An error occurred fetching quotes for ${symbols}: ${error.message}`,
+							text: `No quotes found for symbols: ${symbols}.`,
 						},
 					],
 				}
 			}
-		},
+
+			logger.debug('[getQuotes] Successfully fetched quotes', { 
+				symbols,
+				count: Object.keys(quotesData).length
+			})
+			
+			return {
+				content: [
+					{
+						type: 'text',
+						text: `Successfully fetched quotes for ${symbols}:`,
+					},
+					{
+						type: 'text',
+						text: JSON.stringify(quotesData, null, 2),
+					},
+				],
+			}
+		}),
 	)
 
 	server.tool(
@@ -69,60 +69,49 @@ export function registerQuotesTools(
 			...GetQuoteBySymbolIdRequestPathParamsSchema.shape,
 			...GetQuoteBySymbolIdRequestQueryParamsSchema.shape,
 		},
-		async ({ symbol_id, fields }) => {
-			const accessToken = await getAccessToken()
-			invariant(accessToken, '[getQuoteBySymbolId] Error: No access token.')
-
-			try {
-				console.log(
-					`[getQuoteBySymbolId] Fetching quote for symbol: ${symbol_id} with fields: ${fields}`,
-				)
-				const quoteData = await marketData.quotes.getQuoteBySymbolId(
-					accessToken,
-					{
-						pathParams: { symbol_id },
-						queryParams: { fields },
-					},
-				)
-				// The response for a single symbol is also a map { symbol: quoteDetails }
-				if (
-					!quoteData ||
-					Object.keys(quoteData).length === 0 ||
-					!quoteData[symbol_id.toUpperCase()]
-				) {
-					return {
-						content: [
-							{
-								type: 'text',
-								text: `No quote found for symbol: ${symbol_id}.`,
-							},
-						],
-					}
-				}
-
+		schwabTool(
+			getAccessToken,
+			GetQuoteBySymbolIdSchema,
+			async (token, { symbol_id, fields }) => {
+			logger.info('[getQuoteBySymbolId] Fetching quote', { symbol_id, fields })
+			
+			const quoteData = await marketData.quotes.getQuoteBySymbolId(
+				token,
+				{
+					pathParams: { symbol_id },
+					queryParams: { fields },
+				},
+			)
+			// The response for a single symbol is also a map { symbol: quoteDetails }
+			if (
+				!quoteData ||
+				Object.keys(quoteData).length === 0 ||
+				!quoteData[symbol_id.toUpperCase()]
+			) {
 				return {
 					content: [
 						{
 							type: 'text',
-							text: `Successfully fetched quote for ${symbol_id}:`,
-						},
-						{
-							type: 'text',
-							text: JSON.stringify(quoteData[symbol_id.toUpperCase()], null, 2),
-						},
-					],
-				}
-			} catch (error: any) {
-				console.error('[getQuoteBySymbolId] Error with Schwab API:', error)
-				return {
-					content: [
-						{
-							type: 'text',
-							text: `An error occurred fetching quote for ${symbol_id}: ${error.message}`,
+							text: `No quote found for symbol: ${symbol_id}.`,
 						},
 					],
 				}
 			}
-		},
+
+			logger.debug('[getQuoteBySymbolId] Successfully fetched quote', { symbol_id })
+			
+			return {
+				content: [
+					{
+						type: 'text',
+						text: `Successfully fetched quote for ${symbol_id}:`,
+					},
+					{
+						type: 'text',
+						text: JSON.stringify(quoteData[symbol_id.toUpperCase()], null, 2),
+					},
+				],
+			}
+		}),
 	)
 }
