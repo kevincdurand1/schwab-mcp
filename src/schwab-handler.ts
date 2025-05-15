@@ -141,15 +141,13 @@ app.get('/callback', async (c) => {
 			return c.text('Failed to get access token', 500)
 		}
 
-		const accessToken = tokenSet.accessToken
-
 		// Store the token for future reference (not actually used in demo)
-		tokenStore.set('current', accessToken)
+		tokenStore.set('current', JSON.stringify(tokenSet))
 
 		// Fetch the user info from Schwab
 		try {
 			const userPreferenceData =
-				await trader.userPreference.getUserPreference(accessToken)
+				await trader.userPreference.getUserPreference(tokenSet.accessToken)
 
 			// Extract data based on the UserPreference schema
 			let userIdFromSchwab: string
@@ -177,7 +175,9 @@ app.get('/callback', async (c) => {
 				scope: oauthReqInfo.scope,
 				props: {
 					name: userNameFromSchwab,
-					accessToken, // The Schwab access token
+					accessToken: tokenSet.accessToken,
+					refreshToken: tokenSet.refreshToken,
+					expiresAt: tokenSet.expiresAt,
 				},
 			})
 
