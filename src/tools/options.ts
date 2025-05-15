@@ -8,13 +8,13 @@ import {
 
 export function registerOptionsTools(
 	server: McpServer,
-	getAccessToken: () => string | undefined,
+	getAccessToken: () => Promise<string>,
 ) {
 	server.tool(
 		'getOptionChain',
 		GetOptionChainRequestQueryParamsSchema.shape,
 		async (params) => {
-			const accessToken = getAccessToken()
+			const accessToken = await getAccessToken()
 			invariant(accessToken, '[getOptionChain] Error: No access token.')
 
 			try {
@@ -67,7 +67,7 @@ export function registerOptionsTools(
 		'getOptionExpirationChain',
 		GetOptionExpirationChainRequestQueryParamsSchema.shape,
 		async ({ symbol }) => {
-			const accessToken = getAccessToken()
+			const accessToken = await getAccessToken()
 			invariant(
 				accessToken,
 				'[getOptionExpirationChain] Error: No access token.',

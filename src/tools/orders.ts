@@ -5,13 +5,13 @@ import { GetOrdersRequestQueryParams } from '@sudowealth/schwab-api/schemas'
 
 export function registerOrderTools(
 	server: McpServer,
-	getAccessToken: () => string | undefined,
+	getAccessToken: () => Promise<string>,
 ) {
 	server.tool(
 		'getOrders',
 		GetOrdersRequestQueryParams.shape,
 		async ({ maxResults, fromEnteredTime, toEnteredTime, status }) => {
-			const accessToken = getAccessToken()
+			const accessToken = await getAccessToken()
 			invariant(accessToken, '[getOrders] Error: No access token.')
 
 			try {

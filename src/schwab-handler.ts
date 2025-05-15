@@ -146,8 +146,9 @@ app.get('/callback', async (c) => {
 
 		// Fetch the user info from Schwab
 		try {
-			const userPreferenceData =
-				await trader.userPreference.getUserPreference(tokenSet.accessToken)
+			const userPreferenceData = await trader.userPreference.getUserPreference(
+				tokenSet.accessToken,
+			)
 
 			// Extract data based on the UserPreference schema
 			let userIdFromSchwab: string

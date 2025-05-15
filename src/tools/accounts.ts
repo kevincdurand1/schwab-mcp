@@ -5,13 +5,13 @@ import { z } from 'zod'
 
 export function registerAccountTools(
 	server: McpServer,
-	getAccessToken: () => string | undefined,
+	getAccessToken: () => Promise<string>,
 ) {
 	server.tool(
 		'getAccounts',
 		{ showPositions: z.boolean().default(false) },
 		async ({ showPositions }) => {
-			const accessToken = getAccessToken()
+			const accessToken = await getAccessToken()
 			invariant(accessToken, '[getAccounts] Error: No access token.')
 
 			try {
@@ -49,7 +49,7 @@ export function registerAccountTools(
 	)
 
 	server.tool('getAccountNumbers', {}, async (_args: {}) => {
-		const accessToken = getAccessToken()
+		const accessToken = await getAccessToken()
 		invariant(accessToken, '[getAccountNumbers] Error: No access token.')
 
 		try {

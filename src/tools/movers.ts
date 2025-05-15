@@ -8,7 +8,7 @@ import {
 
 export function registerMoversTools(
 	server: McpServer,
-	getAccessToken: () => string | undefined,
+	getAccessToken: () => Promise<string>,
 ) {
 	server.tool(
 		'getMovers',
@@ -17,7 +17,7 @@ export function registerMoversTools(
 			...GetMoversRequestPathParamsSchema.shape,
 		},
 		async ({ symbol_id, sort, frequency }) => {
-			const accessToken = getAccessToken()
+			const accessToken = await getAccessToken()
 			invariant(accessToken, '[getMovers] Error: No access token.')
 
 			try {

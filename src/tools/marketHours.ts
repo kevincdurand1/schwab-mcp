@@ -9,13 +9,13 @@ import {
 
 export function registerMarketHoursTools(
 	server: McpServer,
-	getAccessToken: () => string | undefined,
+	getAccessToken: () => Promise<string>,
 ) {
 	server.tool(
 		'getMarketHours',
 		GetMarketHoursRequestQueryParamsSchema.shape,
 		async ({ markets, date }) => {
-			const accessToken = getAccessToken()
+			const accessToken = await getAccessToken()
 			invariant(accessToken, '[getMarketHours] Error: No access token.')
 
 			try {
@@ -72,7 +72,7 @@ export function registerMarketHoursTools(
 			...GetMarketHoursByMarketIdRequestPathParamsSchema.shape,
 		},
 		async ({ market_id, date }) => {
-			const accessToken = getAccessToken()
+			const accessToken = await getAccessToken()
 			invariant(
 				accessToken,
 				'[getMarketHoursByMarketId] Error: No access token.',

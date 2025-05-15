@@ -5,13 +5,13 @@ import { GetPriceHistoryRequestQueryParamsSchema } from '@sudowealth/schwab-api/
 
 export function registerPriceHistoryTools(
 	server: McpServer,
-	getAccessToken: () => string | undefined,
+	getAccessToken: () => Promise<string>,
 ) {
 	server.tool(
 		'getPriceHistory',
 		GetPriceHistoryRequestQueryParamsSchema.shape,
 		async (params) => {
-			const accessToken = getAccessToken()
+			const accessToken = await getAccessToken()
 			invariant(accessToken, '[getPriceHistory] Error: No access token.')
 
 			try {

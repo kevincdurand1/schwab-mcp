@@ -5,13 +5,13 @@ import { GetInstrumentsRequestQueryParamsSchema } from '@sudowealth/schwab-api/s
 
 export function registerInstrumentTools(
 	server: McpServer,
-	getAccessToken: () => string | undefined,
+	getAccessToken: () => Promise<string>,
 ) {
 	server.tool(
 		'searchInstruments',
 		GetInstrumentsRequestQueryParamsSchema.shape,
 		async ({ symbol, projection }) => {
-			const accessToken = getAccessToken()
+			const accessToken = await getAccessToken()
 			invariant(accessToken, '[searchInstruments] Error: No access token.')
 
 			try {

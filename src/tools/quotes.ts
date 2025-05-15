@@ -9,13 +9,13 @@ import {
 
 export function registerQuotesTools(
 	server: McpServer,
-	getAccessToken: () => string | undefined,
+	getAccessToken: () => Promise<string>,
 ) {
 	server.tool(
 		'getQuotes',
 		GetQuotesRequestQueryParamsSchema.shape,
 		async ({ symbols, fields, indicative }) => {
-			const accessToken = getAccessToken()
+			const accessToken = await getAccessToken()
 			invariant(accessToken, '[getQuotes] Error: No access token.')
 
 			try {
@@ -70,7 +70,7 @@ export function registerQuotesTools(
 			...GetQuoteBySymbolIdRequestQueryParamsSchema.shape,
 		},
 		async ({ symbol_id, fields }) => {
-			const accessToken = getAccessToken()
+			const accessToken = await getAccessToken()
 			invariant(accessToken, '[getQuoteBySymbolId] Error: No access token.')
 
 			try {

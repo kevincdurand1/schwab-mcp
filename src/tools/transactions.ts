@@ -5,13 +5,13 @@ import { GetTransactionsRequestQueryParams } from '@sudowealth/schwab-api/schema
 
 export function registerTransactionTools(
 	server: McpServer,
-	getAccessToken: () => string | undefined,
+	getAccessToken: () => Promise<string>,
 ) {
 	server.tool(
 		'getTransactions',
 		GetTransactionsRequestQueryParams.shape,
 		async ({ startDate, endDate, types, symbol }) => {
-			const accessToken = getAccessToken()
+			const accessToken = await getAccessToken()
 			invariant(accessToken, '[getTransactions] Error: No access token.')
 
 			const accounts = await trader.accounts.getAccountNumbers(accessToken)
