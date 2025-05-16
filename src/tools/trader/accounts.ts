@@ -2,7 +2,7 @@ import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { trader } from '@sudowealth/schwab-api'
 import { z } from 'zod'
 import { logger } from '../../shared/logger'
-import { schwabTool } from '../utils'
+import { schwabTool } from '../../shared/utils'
 
 // Define schema for getAccounts
 const GetAccountsSchema = z.object({

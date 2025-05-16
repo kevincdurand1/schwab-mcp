@@ -2,7 +2,7 @@ import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { trader } from '@sudowealth/schwab-api'
 import { GetTransactionsRequestQueryParams } from '@sudowealth/schwab-api/schemas'
 import { logger } from '../../shared/logger'
-import { schwabTool } from '../utils'
+import { schwabTool } from '../../shared/utils'
 
 export function registerTransactionTools(
 	server: McpServer,

@@ -7,7 +7,7 @@ import {
 } from '@sudowealth/schwab-api/schemas'
 import { z } from 'zod'
 import { logger } from '../../shared/logger'
-import { mergeShapes, schwabTool } from '../utils'
+import { mergeShapes, schwabTool } from '../../shared/utils'
 
 // Create combined schema for getQuoteBySymbolId
 const GetQuoteBySymbolIdSchema = z.object(

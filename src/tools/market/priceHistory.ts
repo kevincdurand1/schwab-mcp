@@ -2,7 +2,7 @@ import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { marketData } from '@sudowealth/schwab-api'
 import { GetPriceHistoryRequestQueryParamsSchema } from '@sudowealth/schwab-api/schemas'
 import { logger } from '../../shared/logger'
-import { schwabTool } from '../utils'
+import { schwabTool } from '../../shared/utils'
 
 export function registerPriceHistoryTools(
 	server: McpServer,

@@ -5,7 +5,7 @@ import {
 	GetOptionExpirationChainRequestQueryParamsSchema,
 } from '@sudowealth/schwab-api/schemas'
 import { logger } from '../../shared/logger'
-import { schwabTool } from '../utils'
+import { schwabTool } from '../../shared/utils'
 
 export function registerOptionsTools(
 	server: McpServer,

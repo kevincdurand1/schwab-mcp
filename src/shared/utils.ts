@@ -1,6 +1,6 @@
 import { invariant } from '@epic-web/invariant'
 import { type z } from 'zod'
-import { logger } from '../shared/logger'
+import { logger } from './logger'
 
 /**
  * Converts any error to a SchwabApiError with appropriate status code and message

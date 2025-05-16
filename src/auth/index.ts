@@ -1,4 +1,4 @@
 // Export all auth-related modules
-export * from './schwabAuth'
-export * from './schwab/cookies'
-export { SchwabHandler } from './schwab/handler'
+export * from './client'
+export * from './cookies'
+export { SchwabHandler } from './handler'

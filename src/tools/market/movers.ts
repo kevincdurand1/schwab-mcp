@@ -6,7 +6,7 @@ import {
 } from '@sudowealth/schwab-api/schemas'
 import { z } from 'zod'
 import { logger } from '../../shared/logger'
-import { mergeShapes, schwabTool } from '../utils'
+import { mergeShapes, schwabTool } from '../../shared/utils'
 
 // Create a combined schema for the movers tool
 const GetMoversSchema = z.object(

@@ -4,9 +4,9 @@ import {
 } from '@cloudflare/workers-oauth-provider'
 import { trader } from '@sudowealth/schwab-api'
 import { Hono } from 'hono'
-import { logger } from '../../shared/logger'
-import { type Env } from '../../types/env'
-import { createSchwabAuth, redirectToSchwab } from '../schwabAuth'
+import { logger } from '../shared/logger'
+import { type Env } from '../types/env'
+import { createSchwabAuth, redirectToSchwab } from './client'
 import {
 	clientIdAlreadyApproved,
 	parseRedirectApproval,
