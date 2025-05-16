@@ -3,10 +3,10 @@ import {
 	type OAuthHelpers,
 } from '@cloudflare/workers-oauth-provider'
 import { trader } from '@sudowealth/schwab-api'
-import { Hono, type Context } from 'hono'
+import { Hono } from 'hono'
 import { logger } from '../../shared/logger'
 import { type Env } from '../../types/env'
-import { createSchwabAuth } from '../schwabAuth'
+import { createSchwabAuth, redirectToSchwab } from '../schwabAuth'
 import {
 	clientIdAlreadyApproved,
 	parseRedirectApproval,
@@ -39,8 +39,9 @@ app.get('/authorize', async (c) => {
 	return renderApprovalDialog(c.req.raw, {
 		client: await c.env.OAUTH_PROVIDER.lookupClient(clientId),
 		server: {
-			name: 'Schwab OAuth Demo',
-			description: 'This MCP Server is a demo for Schwab OAuth.',
+			name: 'Schwab MCP Server',
+			description:
+				'Access your Schwab accounts and market data in MCP clients.',
 		},
 		state: { oauthReqInfo },
 	})
@@ -61,42 +62,6 @@ app.post('/authorize', async (c) => {
 
 	return redirectToSchwab(c, state.oauthReqInfo, headers)
 })
-
-async function redirectToSchwab(
-	c: Context,
-	oauthReqInfo: AuthRequest,
-	headers: Record<string, string> = {},
-) {
-	const redirectUri = new URL('/callback', c.req.raw.url).href
-
-	// Get the authorization URL from the schwab-api library
-	// We need to access the underlying auth client directly for this
-	// Hacky but necessary since our SchwabAuth interface focuses on token operations
-	const schwabScope = ['SchwabApi', 'oauth2', 'read']
-	const authClient = require('@sudowealth/schwab-api').createAuthClient({
-		clientId: c.env.SCHWAB_CLIENT_ID,
-		clientSecret: c.env.SCHWAB_CLIENT_SECRET,
-		redirectUri,
-		save: async () => {},
-		load: async () => null,
-	})
-
-	const authResponse = authClient.getAuthorizationUrl({
-		scope: schwabScope,
-	})
-
-	// Need to manually add state parameter
-	const authUrl = new URL(authResponse.authUrl)
-	authUrl.searchParams.set('state', btoa(JSON.stringify(oauthReqInfo)))
-
-	return new Response(null, {
-		status: 302,
-		headers: {
-			...headers,
-			location: authUrl.toString(),
-		},
-	})
-}
 
 /**
  * OAuth Callback Endpoint
@@ -141,34 +106,23 @@ app.get('/callback', async (c) => {
 			const userPreferenceData = await trader.userPreference.getUserPreference(
 				tokenSet.accessToken,
 			)
-
-			// Extract data based on the UserPreference schema
-			let userIdFromSchwab: string
-			let userNameFromSchwab: string = 'Schwab User' // Default name
-
-			if (userPreferenceData?.streamerInfo?.[0]?.schwabClientCorrelId) {
-				userIdFromSchwab =
-					userPreferenceData.streamerInfo[0].schwabClientCorrelId
-				userNameFromSchwab = `User ${userIdFromSchwab.substring(0, 8)}`
-			} else {
-				// Fallback if schwabClientCorrelId is not available
-				logger.warn(
-					'Relevant user identifier not found in UserPreference. Falling back to a temporary ID.',
-					{ path: '/callback' },
-				)
-				userIdFromSchwab = `schwabUser_${Date.now()}`
+			const userIdFromSchwab =
+				userPreferenceData?.streamerInfo?.[0]?.schwabClientCorrelId
+			if (!userIdFromSchwab) {
+				logger.error('No user ID found in UserPreference', {
+					path: '/callback',
+				})
+				return c.text('No user ID found in UserPreference', 500)
 			}
 
 			// Return back to the MCP client a new token
 			const { redirectTo } = await c.env.OAUTH_PROVIDER.completeAuthorization({
 				request: oauthReqInfo,
 				userId: userIdFromSchwab,
-				metadata: {
-					label: userNameFromSchwab,
-				},
+				metadata: { label: userIdFromSchwab },
 				scope: oauthReqInfo.scope,
 				props: {
-					name: userNameFromSchwab,
+					userId: userIdFromSchwab,
 					accessToken: tokenSet.accessToken,
 					refreshToken: tokenSet.refreshToken,
 					expiresAt: tokenSet.expiresAt,
