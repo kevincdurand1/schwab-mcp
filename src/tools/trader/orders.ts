@@ -10,34 +10,38 @@ export function registerOrderTools(
 ) {
 	server.tool(
 		'getOrders',
-			GetOrdersRequestQueryParams.shape,
-			schwabTool(
-				getAccessToken,
-				GetOrdersRequestQueryParams,
-				async (token, queryParams) => {
-			logger.info('[getOrders] Fetching orders', { 
-				maxResults: queryParams.maxResults,
-				hasDateFilter: !!queryParams.fromEnteredTime || !!queryParams.toEnteredTime 
-			})
-			
-			const orders = await trader.orders.getOrders(token, {
-				queryParams
-			})
+		GetOrdersRequestQueryParams.shape,
+		schwabTool(
+			getAccessToken,
+			GetOrdersRequestQueryParams,
+			async (token, queryParams) => {
+				logger.info('[getOrders] Fetching orders', {
+					maxResults: queryParams.maxResults,
+					hasDateFilter:
+						!!queryParams.fromEnteredTime || !!queryParams.toEnteredTime,
+				})
 
-			if (orders.length === 0) {
-				return {
-					content: [{ type: 'text', text: 'No Schwab orders found.' }],
+				const orders = await trader.orders.getOrders(token, {
+					queryParams,
+				})
+
+				if (orders.length === 0) {
+					return {
+						content: [{ type: 'text', text: 'No Schwab orders found.' }],
+					}
 				}
-			}
 
-			logger.debug('[getOrders] Successfully fetched orders', { count: orders.length })
-			
-			return {
-				content: [
-					{ type: 'text', text: 'Successfully fetched Schwab orders:' },
-					{ type: 'text', text: JSON.stringify(orders, null, 2) },
-				],
-			}
-		}),
+				logger.debug('[getOrders] Successfully fetched orders', {
+					count: orders.length,
+				})
+
+				return {
+					content: [
+						{ type: 'text', text: 'Successfully fetched Schwab orders:' },
+						{ type: 'text', text: JSON.stringify(orders, null, 2) },
+					],
+				}
+			},
+		),
 	)
 }

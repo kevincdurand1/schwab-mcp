@@ -6,7 +6,7 @@ import { schwabTool } from '../utils'
 
 // Define schema for getAccounts
 const GetAccountsSchema = z.object({
-  showPositions: z.boolean().default(false)
+	showPositions: z.boolean().default(false),
 })
 
 // Define schema for getAccountNumbers (empty schema)
@@ -14,7 +14,7 @@ const GetAccountNumbersSchema = z.object({})
 
 export function registerAccountTools(
 	server: McpServer,
-	getAccessToken: () => Promise<string>
+	getAccessToken: () => Promise<string>,
 ) {
 	server.tool(
 		'getAccounts',
@@ -36,40 +36,39 @@ export function registerAccountTools(
 				const accountSummaries = accounts.map((acc: any) => ({
 					...acc.securitiesAccount,
 				}))
-				logger.debug('Successfully fetched accounts', { count: accounts.length })
+				logger.debug('Successfully fetched accounts', {
+					count: accounts.length,
+				})
 				return {
 					content: [
 						{ type: 'text', text: 'Successfully fetched Schwab accounts:' },
 						{ type: 'text', text: JSON.stringify(accountSummaries, null, 2) },
 					],
 				}
-			}
-		)
+			},
+		),
 	)
 
 	server.tool(
 		'getAccountNumbers',
 		{},
-		schwabTool(
-			getAccessToken,
-			GetAccountNumbersSchema,
-			async (token) => {
-				logger.info('Fetching account numbers')
-				const accounts = await trader.accounts.getAccountNumbers(token)
-				if (accounts.length === 0) {
-					return {
-						content: [{ type: 'text', text: 'No Schwab accounts found.' }],
-					}
-				}
-				logger.debug('Successfully fetched account numbers', { count: accounts.length })
+		schwabTool(getAccessToken, GetAccountNumbersSchema, async (token) => {
+			logger.info('Fetching account numbers')
+			const accounts = await trader.accounts.getAccountNumbers(token)
+			if (accounts.length === 0) {
 				return {
-					content: [
-						{ type: 'text', text: 'Successfully fetched Schwab accounts:' },
-						{ type: 'text', text: JSON.stringify(accounts, null, 2) },
-					],
+					content: [{ type: 'text', text: 'No Schwab accounts found.' }],
 				}
 			}
-		)
+			logger.debug('Successfully fetched account numbers', {
+				count: accounts.length,
+			})
+			return {
+				content: [
+					{ type: 'text', text: 'Successfully fetched Schwab accounts:' },
+					{ type: 'text', text: JSON.stringify(accounts, null, 2) },
+				],
+			}
+		}),
 	)
 }
-

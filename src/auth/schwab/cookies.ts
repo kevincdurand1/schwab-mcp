@@ -187,25 +187,25 @@ body {
  * Converts an ArrayBuffer to a hex string
  */
 function toHex(buffer: ArrayBuffer): string {
-  return Array.from(new Uint8Array(buffer))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('')
+	return Array.from(new Uint8Array(buffer))
+		.map((b) => b.toString(16).padStart(2, '0'))
+		.join('')
 }
 
 /**
  * Converts a hex string to an ArrayBuffer
  */
 function fromHex(hexString: string): ArrayBuffer {
-  const bytes = new Uint8Array(
-    hexString.match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16))
-  )
-  return bytes.buffer
+	const bytes = new Uint8Array(
+		hexString.match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16)),
+	)
+	return bytes.buffer
 }
 
 /**
  * Decodes a URL-safe base64 string back to its original data.
  * Safely handles base64 decoding before attempting to parse JSON.
- * 
+ *
  * @param encoded - The URL-safe base64 encoded string.
  * @returns The original data.
  */
@@ -213,16 +213,16 @@ function decodeState<T = any>(encoded: string): T {
 	try {
 		// Step 1: Safe base64 decode to binary string
 		const binaryString = atob(encoded)
-		
+
 		// Step 2: Convert to Uint8Array for safer handling
 		const bytes = new Uint8Array(binaryString.length)
 		for (let i = 0; i < binaryString.length; i++) {
 			bytes[i] = binaryString.charCodeAt(i)
 		}
-		
+
 		// Step 3: Convert back to string for JSON parsing
 		const jsonString = new TextDecoder().decode(bytes)
-		
+
 		// Step 4: Parse JSON
 		return JSON.parse(jsonString) as T
 	} catch (e) {
@@ -320,7 +320,7 @@ async function getApprovedClientsFromCookie(
 	}
 
 	const [signatureHex, base64Payload] = parts
-	
+
 	// Step 1: Safe base64 decode to Uint8Array (no JSON.parse yet)
 	let decodedBytes: Uint8Array
 	try {
@@ -335,10 +335,10 @@ async function getApprovedClientsFromCookie(
 		console.warn('Invalid base64 payload in cookie:', e)
 		return undefined
 	}
-	
+
 	// Convert Uint8Array back to string for signature verification
 	const payloadString = new TextDecoder().decode(decodedBytes)
-	
+
 	// Step 2: Verify HMAC signature on raw bytes before parsing JSON
 	const key = await importKey(secret)
 	const isValid = await verifySignature(

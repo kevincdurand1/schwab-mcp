@@ -6,7 +6,7 @@ import { schwabTool } from '../utils'
 
 export function registerInstrumentTools(
 	server: McpServer,
-	getAccessToken: () => Promise<string>
+	getAccessToken: () => Promise<string>,
 ) {
 	server.tool(
 		'searchInstruments',
@@ -15,14 +15,14 @@ export function registerInstrumentTools(
 			getAccessToken,
 			GetInstrumentsRequestQueryParamsSchema,
 			async (token, { symbol, projection }) => {
-				logger.info('[searchInstruments] Fetching instruments', { symbol, projection })
-				
-				const instruments = await marketData.instruments.getInstruments(
-					token,
-					{
-						queryParams: { symbol, projection },
-					},
-				)
+				logger.info('[searchInstruments] Fetching instruments', {
+					symbol,
+					projection,
+				})
+
+				const instruments = await marketData.instruments.getInstruments(token, {
+					queryParams: { symbol, projection },
+				})
 
 				if (
 					!instruments ||
@@ -38,12 +38,14 @@ export function registerInstrumentTools(
 					}
 				}
 
-				const instrumentCount = Array.isArray(instruments) ? instruments.length : 1
-				logger.debug('[searchInstruments] Successfully fetched instruments', { 
-					symbol, 
-					count: instrumentCount 
+				const instrumentCount = Array.isArray(instruments)
+					? instruments.length
+					: 1
+				logger.debug('[searchInstruments] Successfully fetched instruments', {
+					symbol,
+					count: instrumentCount,
 				})
-				
+
 				return {
 					content: [
 						{
@@ -53,7 +55,7 @@ export function registerInstrumentTools(
 						{ type: 'text', text: JSON.stringify(instruments, null, 2) },
 					],
 				}
-			}
-		)
+			},
+		),
 	)
 }

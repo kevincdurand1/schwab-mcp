@@ -10,14 +10,16 @@ import { logger } from '../../shared/logger'
 import { mergeShapes, schwabTool } from '../utils'
 
 // Create combined schema for getMarketHoursByMarketId
-const GetMarketHoursByMarketIdSchema = z.object(mergeShapes(
-	GetMarketHoursByMarketIdRequestQueryParamsSchema.shape,
-	GetMarketHoursByMarketIdRequestPathParamsSchema.shape
-))
+const GetMarketHoursByMarketIdSchema = z.object(
+	mergeShapes(
+		GetMarketHoursByMarketIdRequestQueryParamsSchema.shape,
+		GetMarketHoursByMarketIdRequestPathParamsSchema.shape,
+	),
+)
 
 export function registerMarketHoursTools(
 	server: McpServer,
-	getAccessToken: () => Promise<string>
+	getAccessToken: () => Promise<string>,
 ) {
 	server.tool(
 		'getMarketHours',
@@ -25,15 +27,21 @@ export function registerMarketHoursTools(
 		schwabTool(
 			getAccessToken,
 			GetMarketHoursRequestQueryParamsSchema,
-			async (token: string, { markets, date }: z.infer<typeof GetMarketHoursRequestQueryParamsSchema>) => {
+			async (
+				token: string,
+				{
+					markets,
+					date,
+				}: z.infer<typeof GetMarketHoursRequestQueryParamsSchema>,
+			) => {
 				const queryParams = {
 					markets: Array.isArray(markets) ? markets : [markets],
 					date,
 				}
-				
-				logger.info('[getMarketHours] Fetching market hours', { 
-					markets: queryParams.markets.join(','), 
-					date
+
+				logger.info('[getMarketHours] Fetching market hours', {
+					markets: queryParams.markets.join(','),
+					date,
 				})
 
 				const hours = await marketData.marketHours.getMarketHours(token, {
@@ -51,10 +59,10 @@ export function registerMarketHoursTools(
 					}
 				}
 
-				logger.debug('[getMarketHours] Successfully fetched market hours', { 
-					marketCount: Object.keys(hours).length 
+				logger.debug('[getMarketHours] Successfully fetched market hours', {
+					marketCount: Object.keys(hours).length,
 				})
-				
+
 				return {
 					content: [
 						{
@@ -64,8 +72,8 @@ export function registerMarketHoursTools(
 						{ type: 'text', text: JSON.stringify(hours, null, 2) },
 					],
 				}
-			}
-		)
+			},
+		),
 	)
 
 	server.tool(
@@ -77,10 +85,13 @@ export function registerMarketHoursTools(
 		schwabTool(
 			getAccessToken,
 			GetMarketHoursByMarketIdSchema,
-			async (token: string, { market_id, date }: z.infer<typeof GetMarketHoursByMarketIdSchema>) => {
-				logger.info('[getMarketHoursByMarketId] Fetching market hours', { 
-					market_id, 
-					date 
+			async (
+				token: string,
+				{ market_id, date }: z.infer<typeof GetMarketHoursByMarketIdSchema>,
+			) => {
+				logger.info('[getMarketHoursByMarketId] Fetching market hours', {
+					market_id,
+					date,
 				})
 
 				const hours = await marketData.marketHours.getMarketHoursByMarketId(
@@ -100,10 +111,13 @@ export function registerMarketHoursTools(
 					}
 				}
 
-				logger.debug('[getMarketHoursByMarketId] Successfully fetched market hours', { 
-					market_id 
-				})
-				
+				logger.debug(
+					'[getMarketHoursByMarketId] Successfully fetched market hours',
+					{
+						market_id,
+					},
+				)
+
 				return {
 					content: [
 						{
@@ -113,7 +127,7 @@ export function registerMarketHoursTools(
 						{ type: 'text', text: JSON.stringify(hours, null, 2) },
 					],
 				}
-			}
-		)
+			},
+		),
 	)
 }

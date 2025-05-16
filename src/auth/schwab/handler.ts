@@ -5,7 +5,7 @@ import {
 import { trader } from '@sudowealth/schwab-api'
 import { Hono, type Context } from 'hono'
 import { logger } from '../../shared/logger'
-import  { type Env } from '../../types/env'
+import { type Env } from '../../types/env'
 import { createSchwabAuth } from '../schwabAuth'
 import {
 	clientIdAlreadyApproved,
@@ -19,7 +19,10 @@ app.get('/authorize', async (c) => {
 	const oauthReqInfo = await c.env.OAUTH_PROVIDER.parseAuthRequest(c.req.raw)
 	const { clientId } = oauthReqInfo
 	if (!clientId) {
-		logger.error('Invalid request: clientId is missing', { path: '/authorize', method: 'GET' })
+		logger.error('Invalid request: clientId is missing', {
+			path: '/authorize',
+			method: 'GET',
+		})
 		return c.text('Invalid request', 400)
 	}
 
@@ -49,7 +52,10 @@ app.post('/authorize', async (c) => {
 		c.env.COOKIE_ENCRYPTION_KEY,
 	)
 	if (!state.oauthReqInfo) {
-		logger.error('Invalid request: state.oauthReqInfo is missing', { path: '/authorize', method: 'POST' })
+		logger.error('Invalid request: state.oauthReqInfo is missing', {
+			path: '/authorize',
+			method: 'POST',
+		})
 		return c.text('Invalid request', 400)
 	}
 
@@ -62,7 +68,7 @@ async function redirectToSchwab(
 	headers: Record<string, string> = {},
 ) {
 	const redirectUri = new URL('/callback', c.req.raw.url).href
-	
+
 	// Get the authorization URL from the schwab-api library
 	// We need to access the underlying auth client directly for this
 	// Hacky but necessary since our SchwabAuth interface focuses on token operations
@@ -74,7 +80,7 @@ async function redirectToSchwab(
 		save: async () => {},
 		load: async () => null,
 	})
-	
+
 	const authResponse = authClient.getAuthorizationUrl({
 		scope: schwabScope,
 	})
@@ -146,7 +152,10 @@ app.get('/callback', async (c) => {
 				userNameFromSchwab = `User ${userIdFromSchwab.substring(0, 8)}`
 			} else {
 				// Fallback if schwabClientCorrelId is not available
-				logger.warn('Relevant user identifier not found in UserPreference. Falling back to a temporary ID.', { path: '/callback' })
+				logger.warn(
+					'Relevant user identifier not found in UserPreference. Falling back to a temporary ID.',
+					{ path: '/callback' },
+				)
 				userIdFromSchwab = `schwabUser_${Date.now()}`
 			}
 
@@ -168,10 +177,13 @@ app.get('/callback', async (c) => {
 
 			return Response.redirect(redirectTo)
 		} catch (error) {
-			logger.error('Failed to fetch user preferences', { path: '/callback', error })
+			logger.error('Failed to fetch user preferences', {
+				path: '/callback',
+				error,
+			})
 			return c.text(
 				`Failed to fetch user preferences: ${error instanceof Error ? error.message : String(error)}`,
-				500
+				500,
 			)
 		}
 	} catch (error: any) {

@@ -1,7 +1,8 @@
 import OAuthProvider from '@cloudflare/workers-oauth-provider'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { TokenManager } from '@sudowealth/schwab-api'
 import { DurableMCP } from 'workers-mcp'
-import { SchwabHandler, TokenManager, createSchwabAuth } from './auth'
+import { SchwabHandler, createSchwabAuth } from './auth'
 import {
 	registerAccountTools,
 	registerInstrumentTools,
@@ -24,7 +25,6 @@ type Props = {
 
 export class MyMCP extends DurableMCP<Props, Env> {
 	private tokenManager!: TokenManager
-	private refreshPromise: Promise<void> | null = null
 
 	server = new McpServer({
 		name: 'Schwab MCP',
@@ -35,7 +35,7 @@ export class MyMCP extends DurableMCP<Props, Env> {
 		// Create the SchwabAuth service with a callback URL derived from this server
 		const redirectUri = 'https://schwab-mcp.dyeoman2.workers.dev/callback'
 		const authService = createSchwabAuth(this.env, redirectUri)
-		
+
 		// Initialize the TokenManager with the auth service
 		this.tokenManager = new TokenManager(
 			{
@@ -46,40 +46,25 @@ export class MyMCP extends DurableMCP<Props, Env> {
 			authService,
 		)
 
-		// Create a coordinated getAccessToken function that persists tokens
-		// and ensures only one refresh operation happens at a time
+		// Create an access token provider that persists tokens after refreshes
 		const getAccessToken = async (): Promise<string> => {
-			// Case 1: Token is still valid, return it immediately
-			if (Date.now() < this.props.expiresAt - 60_000) {
-				return this.props.accessToken
+			// Get a valid token from the TokenManager, which handles refreshing internally
+			const token = await this.tokenManager.getAccessToken()
+
+			// Store the updated tokens in props if they've changed
+			const tokenSet = this.tokenManager.getTokenSet()
+			if (
+				tokenSet.accessToken !== this.props.accessToken ||
+				tokenSet.refreshToken !== this.props.refreshToken ||
+				tokenSet.expiresAt !== this.props.expiresAt
+			) {
+				// Update our props with the new token values
+				this.props.accessToken = tokenSet.accessToken
+				this.props.refreshToken = tokenSet.refreshToken
+				this.props.expiresAt = tokenSet.expiresAt
 			}
-			
-			// Case 2: We need to refresh, but another request is already refreshing
-			if (this.refreshPromise) {
-				await this.refreshPromise
-				return this.props.accessToken
-			}
-			
-			// Case 3: We need to refresh and nobody else is doing it
-			try {
-				this.refreshPromise = (async () => {
-					// Get fresh token from TokenManager (this updates its internal state)
-					await this.tokenManager.getAccessToken()
-					
-					// Persist the updated token
-					const tokenSet = this.tokenManager.getTokenSet()
-					this.props.accessToken = tokenSet.accessToken
-					this.props.refreshToken = tokenSet.refreshToken
-					this.props.expiresAt = tokenSet.expiresAt
-					
-					// No return here, so this IIFE is Promise<void>
-				})()
-				
-				await this.refreshPromise // Await the refresh operation to complete
-				return this.props.accessToken // Return the updated access token
-			} finally {
-				this.refreshPromise = null
-			}
+
+			return token
 		}
 
 		// Register all tools for accessing Schwab API
