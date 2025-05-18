@@ -17,17 +17,7 @@ export function registerOrderTools(server: McpServer, client: SchwabApiClient) {
 						!!queryParams.fromEnteredTime || !!queryParams.toEnteredTime,
 				})
 
-				const orders = await client.trader.orders.getOrders({
-					queryParams: {
-						maxResults: queryParams.maxResults,
-						fromEnteredTime: queryParams.fromEnteredTime
-							? new Date(queryParams.fromEnteredTime).getTime().toString()
-							: '',
-						toEnteredTime: queryParams.toEnteredTime
-							? new Date(queryParams.toEnteredTime).getTime().toString()
-							: '',
-					},
-				})
+				const orders = await client.trader.orders.getOrders({queryParams})
 
 				if (orders.length === 0) {
 					return {

@@ -29,10 +29,8 @@ export function registerPriceHistoryTools(
 						periodType: params.periodType,
 						frequency: params.frequency,
 						frequencyType: params.frequencyType,
-						startDate: params.startDate
-							? new Date(params.startDate).getTime()
-							: null,
-						endDate: params.endDate ? new Date(params.endDate).getTime() : null,
+						startDate: params.startDate,
+						endDate: params.endDate,
 					},
 				})
 
