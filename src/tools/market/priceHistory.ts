@@ -1,20 +1,19 @@
 import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { marketData } from '@sudowealth/schwab-api'
-import { GetPriceHistoryRequestQueryParamsSchema } from '@sudowealth/schwab-api/schemas'
+import { type SchwabApiClient } from '@sudowealth/schwab-api'
 import { logger } from '../../shared/logger'
 import { schwabTool } from '../../shared/utils'
 
 export function registerPriceHistoryTools(
 	server: McpServer,
-	getAccessToken: () => Promise<string>,
+	client: SchwabApiClient,
 ) {
 	server.tool(
 		'getPriceHistory',
-		GetPriceHistoryRequestQueryParamsSchema.shape,
+		client.schemas.GetPriceHistoryRequestQueryParamsSchema.shape,
 		schwabTool(
-			getAccessToken,
-			GetPriceHistoryRequestQueryParamsSchema,
-			async (token, params) => {
+			client,
+			client.schemas.GetPriceHistoryRequestQueryParamsSchema,
+			async (params) => {
 				logger.info('[getPriceHistory] Fetching price history', {
 					symbol: params.symbol,
 					period: params.period,
@@ -23,8 +22,18 @@ export function registerPriceHistoryTools(
 					frequencyType: params.frequencyType,
 				})
 
-				const history = await marketData.priceHistory.getPriceHistory(token, {
-					queryParams: params,
+				const history = await client.marketData.priceHistory.getPriceHistory({
+					queryParams: {
+						symbol: params.symbol,
+						period: params.period,
+						periodType: params.periodType,
+						frequency: params.frequency,
+						frequencyType: params.frequencyType,
+						startDate: params.startDate
+							? new Date(params.startDate).getTime()
+							: null,
+						endDate: params.endDate ? new Date(params.endDate).getTime() : null,
+					},
 				})
 
 				if (history.empty || !history.candles || history.candles.length === 0) {

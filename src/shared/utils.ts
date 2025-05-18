@@ -1,27 +1,6 @@
-import { invariant } from '@epic-web/invariant'
+import { type SchwabApiClient } from '@sudowealth/schwab-api'
 import { type z } from 'zod'
 import { logger } from './logger'
-
-/**
- * Converts any error to a SchwabApiError with appropriate status code and message
- *
- * @param error The error to convert
- * @returns A SchwabApiError instance
- */
-function toSchwabApiError(error: unknown): SchwabApiError {
-	if (error instanceof SchwabApiError) {
-		return error
-	}
-
-	const status =
-		error instanceof Error && 'status' in error
-			? (error as any).status || 500
-			: 500
-
-	const message = error instanceof Error ? error.message : String(error)
-
-	return new SchwabApiError(status, message)
-}
 
 /**
  * Higher-order function to create Schwab API tool handlers with consistent error handling
@@ -31,7 +10,7 @@ function toSchwabApiError(error: unknown): SchwabApiError {
  * 2. Invokes the API function with the token and validated input
  * 3. Handles errors consistently with appropriate logging
  *
- * @param getAccessTokenProvided The function to retrieve a valid access token
+ * @param client The Schwab API client
  * @param schema The Zod schema used to validate input
  * @param invoke The function that interacts with the Schwab API
  * @returns A tool handler function
@@ -40,9 +19,9 @@ export function schwabTool<
 	S extends z.ZodSchema<any, any>,
 	F extends (...args: any[]) => Promise<any>,
 >(
-	getAccessTokenProvided: () => Promise<string>,
+	client: SchwabApiClient,
 	schema: S,
-	invoke: (token: string, input: z.infer<S>) => ReturnType<F>,
+	invoke: (input: z.infer<S>) => ReturnType<F>,
 ) {
 	// Return a function compatible with the McpServer.tool() expected callback
 	return (args: z.infer<S>) => {
@@ -50,16 +29,7 @@ export function schwabTool<
 		logger.info(`Invoking Schwab API with schema: ${schema.constructor.name}`)
 
 		// Get the access token, then invoke function with proper error handling
-		return getAccessTokenProvided()
-			.then((token: string) => {
-				invariant(token, 'No access token available')
-				return invoke(token, args)
-			})
-			.catch((err: unknown) => {
-				// Convert to a consistent error format and rethrow
-				logger.error('Error calling Schwab API', err)
-				throw toSchwabApiError(err)
-			})
+		return invoke(args)
 	}
 }
 
@@ -74,18 +44,4 @@ export function mergeShapes<T extends z.ZodRawShape[]>(
 	...shapes: T
 ): z.ZodRawShape {
 	return shapes.reduce((acc, shape) => ({ ...acc, ...shape }), {})
-}
-
-/**
- * Custom error class for Schwab API errors
- * Contains status code and error message
- */
-class SchwabApiError extends Error {
-	constructor(
-		public statusCode: number,
-		message: string,
-	) {
-		super(message)
-		this.name = 'SchwabApiError'
-	}
 }

@@ -1,29 +1,27 @@
 import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { marketData } from '@sudowealth/schwab-api'
-import {
-	GetOptionChainRequestQueryParamsSchema,
-	GetOptionExpirationChainRequestQueryParamsSchema,
-} from '@sudowealth/schwab-api/schemas'
+import { type SchwabApiClient } from '@sudowealth/schwab-api'
 import { logger } from '../../shared/logger'
 import { schwabTool } from '../../shared/utils'
 
 export function registerOptionsTools(
 	server: McpServer,
-	getAccessToken: () => Promise<string>,
+	client: SchwabApiClient,
 ) {
 	server.tool(
 		'getOptionChain',
-		GetOptionChainRequestQueryParamsSchema.shape,
+		client.schemas.GetOptionChainRequestQueryParamsSchema.shape,
 		schwabTool(
-			getAccessToken,
-			GetOptionChainRequestQueryParamsSchema,
-			async (token, params) => {
+			client,
+			client.schemas.GetOptionChainRequestQueryParamsSchema,
+			async (params) => {
 				logger.info('[getOptionChain] Fetching option chain', {
 					symbol: params.symbol,
 				})
 
-				const optionChain = await marketData.options.getOptionChain(token, {
-					queryParams: params,
+				const optionChain = await client.marketData.options.getOptionChain({
+					queryParams: {
+						symbol: params.symbol,
+					},
 				})
 
 				if (!optionChain || optionChain.status !== 'SUCCESS') {
@@ -60,18 +58,19 @@ export function registerOptionsTools(
 
 	server.tool(
 		'getOptionExpirationChain',
-		GetOptionExpirationChainRequestQueryParamsSchema.shape,
+		client.schemas.GetOptionExpirationChainRequestQueryParamsSchema.shape,
 		schwabTool(
-			getAccessToken,
-			GetOptionExpirationChainRequestQueryParamsSchema,
-			async (token, { symbol }) => {
+			client,
+			client.schemas.GetOptionExpirationChainRequestQueryParamsSchema,
+			async (params) => {
+				const { symbol } = params
 				logger.info(
 					'[getOptionExpirationChain] Fetching option expiration chain',
 					{ symbol },
 				)
 
 				const expirationChain =
-					await marketData.options.getOptionExpirationChain(token, {
+					await client.marketData.options.getOptionExpirationChain({
 						queryParams: { symbol },
 					})
 

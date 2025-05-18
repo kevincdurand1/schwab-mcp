@@ -1,51 +1,32 @@
 import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { marketData } from '@sudowealth/schwab-api'
-import {
-	GetMarketHoursByMarketIdRequestPathParamsSchema,
-	GetMarketHoursByMarketIdRequestQueryParamsSchema,
-	GetMarketHoursRequestQueryParamsSchema,
-} from '@sudowealth/schwab-api/schemas'
+import { type SchwabApiClient } from '@sudowealth/schwab-api'
 import { z } from 'zod'
 import { logger } from '../../shared/logger'
 import { mergeShapes, schwabTool } from '../../shared/utils'
 
-// Create combined schema for getMarketHoursByMarketId
-const GetMarketHoursByMarketIdSchema = z.object(
-	mergeShapes(
-		GetMarketHoursByMarketIdRequestQueryParamsSchema.shape,
-		GetMarketHoursByMarketIdRequestPathParamsSchema.shape,
-	),
-)
-
 export function registerMarketHoursTools(
 	server: McpServer,
-	getAccessToken: () => Promise<string>,
+	client: SchwabApiClient,
 ) {
 	server.tool(
 		'getMarketHours',
-		GetMarketHoursRequestQueryParamsSchema.shape,
+		client.schemas.GetMarketHoursRequestQueryParamsSchema.shape,
 		schwabTool(
-			getAccessToken,
-			GetMarketHoursRequestQueryParamsSchema,
-			async (
-				token: string,
-				{
-					markets,
-					date,
-				}: z.infer<typeof GetMarketHoursRequestQueryParamsSchema>,
-			) => {
-				const queryParams = {
-					markets: Array.isArray(markets) ? markets : [markets],
-					date,
-				}
+			client,
+			client.schemas.GetMarketHoursRequestQueryParamsSchema,
+			async (params) => {
+				const { markets, date } = params
 
 				logger.info('[getMarketHours] Fetching market hours', {
-					markets: queryParams.markets.join(','),
+					markets: markets.join(','),
 					date,
 				})
 
-				const hours = await marketData.marketHours.getMarketHours(token, {
-					queryParams,
+				const hours = await client.marketData.marketHours.getMarketHours({
+					queryParams: {
+						markets,
+						date: date ? new Date(date).toISOString() : undefined,
+					},
 				})
 
 				if (Object.keys(hours).length === 0) {
@@ -79,25 +60,28 @@ export function registerMarketHoursTools(
 	server.tool(
 		'getMarketHoursByMarketId',
 		{
-			...GetMarketHoursByMarketIdRequestQueryParamsSchema.shape,
-			...GetMarketHoursByMarketIdRequestPathParamsSchema.shape,
+			...client.schemas.GetMarketHoursByMarketIdRequestQueryParamsSchema.shape,
+			...client.schemas.GetMarketHoursByMarketIdRequestPathParamsSchema.shape,
 		},
 		schwabTool(
-			getAccessToken,
-			GetMarketHoursByMarketIdSchema,
-			async (
-				token: string,
-				{ market_id, date }: z.infer<typeof GetMarketHoursByMarketIdSchema>,
-			) => {
+			client,
+			z.object(
+				mergeShapes(
+					client.schemas.GetMarketHoursByMarketIdRequestQueryParamsSchema.shape,
+					client.schemas.GetMarketHoursByMarketIdRequestPathParamsSchema.shape,
+				),
+			),
+			async ({ market_id, date }) => {
 				logger.info('[getMarketHoursByMarketId] Fetching market hours', {
 					market_id,
 					date,
 				})
 
-				const hours = await marketData.marketHours.getMarketHoursByMarketId(
-					token,
-					{ pathParams: { market_id }, queryParams: { date } },
-				)
+				const hours =
+					await client.marketData.marketHours.getMarketHoursByMarketId({
+						pathParams: { market_id },
+						queryParams: { date },
+					})
 
 				if (!hours) {
 					// Or check based on expected structure if an empty object is valid

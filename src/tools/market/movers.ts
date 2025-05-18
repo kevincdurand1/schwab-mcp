@@ -1,42 +1,35 @@
 import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { marketData } from '@sudowealth/schwab-api'
-import {
-	GetMoversRequestPathParamsSchema,
-	GetMoversRequestQueryParamsSchema,
-} from '@sudowealth/schwab-api/schemas'
+import { type SchwabApiClient } from '@sudowealth/schwab-api'
 import { z } from 'zod'
 import { logger } from '../../shared/logger'
 import { mergeShapes, schwabTool } from '../../shared/utils'
 
-// Create a combined schema for the movers tool
-const GetMoversSchema = z.object(
-	mergeShapes(
-		GetMoversRequestQueryParamsSchema.shape,
-		GetMoversRequestPathParamsSchema.shape,
-	),
-)
-
 export function registerMoversTools(
 	server: McpServer,
-	getAccessToken: () => Promise<string>,
+	client: SchwabApiClient,
 ) {
 	server.tool(
 		'getMovers',
 		mergeShapes(
-			GetMoversRequestQueryParamsSchema.shape,
-			GetMoversRequestPathParamsSchema.shape,
+			client.schemas.GetMoversRequestQueryParamsSchema.shape,
+			client.schemas.GetMoversRequestPathParamsSchema.shape,
 		),
 		schwabTool(
-			getAccessToken,
-			GetMoversSchema,
-			async (token, { symbol_id, sort, frequency }) => {
+			client,
+			z.object(
+				mergeShapes(
+					client.schemas.GetMoversRequestQueryParamsSchema.shape,
+					client.schemas.GetMoversRequestPathParamsSchema.shape,
+				),
+			),
+			async ({ symbol_id, sort, frequency }) => {
 				logger.info('[getMovers] Fetching movers', {
 					symbol_id,
 					sort,
 					frequency,
 				})
 
-				const movers = await marketData.movers.getMovers(token, {
+				const movers = await client.marketData.movers.getMovers({
 					pathParams: { symbol_id },
 					queryParams: { sort, frequency },
 				})

@@ -1,22 +1,21 @@
 import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { trader } from '@sudowealth/schwab-api'
-import { GetTransactionsRequestQueryParams } from '@sudowealth/schwab-api/schemas'
+import { type SchwabApiClient } from '@sudowealth/schwab-api'
 import { logger } from '../../shared/logger'
 import { schwabTool } from '../../shared/utils'
 
 export function registerTransactionTools(
 	server: McpServer,
-	getAccessToken: () => Promise<string>,
+	client: SchwabApiClient,
 ) {
 	server.tool(
 		'getTransactions',
-		GetTransactionsRequestQueryParams.shape,
+		client.schemas.GetTransactionsRequestQueryParams.shape,
 		schwabTool(
-			getAccessToken,
-			GetTransactionsRequestQueryParams,
-			async (token, { startDate, endDate, types, symbol }) => {
+			client,
+			client.schemas.GetTransactionsRequestQueryParams,
+			async ({ startDate, endDate, types, symbol }) => {
 				// First get all account numbers
-				const accounts = await trader.accounts.getAccountNumbers(token)
+				const accounts = await client.trader.accounts.getAccountNumbers()
 				if (accounts.length === 0) {
 					return {
 						content: [{ type: 'text', text: 'No Schwab accounts found.' }],
@@ -33,9 +32,8 @@ export function registerTransactionTools(
 
 				const transactions: any[] = []
 				for (const account of accounts) {
-					const accountTransactions = await trader.transactions.getTransactions(
-						token,
-						{
+					const accountTransactions =
+						await client.trader.transactions.getTransactions({
 							pathParams: { accountNumber: account.hashValue },
 							queryParams: {
 								startDate,
@@ -43,8 +41,7 @@ export function registerTransactionTools(
 								types,
 								symbol,
 							},
-						},
-					)
+						})
 					logger.debug('[getTransactions] Transactions for account', {
 						accountHash: account.hashValue,
 						count: accountTransactions.length,

@@ -2,11 +2,11 @@ import {
 	type AuthRequest,
 	type OAuthHelpers,
 } from '@cloudflare/workers-oauth-provider'
-import { trader } from '@sudowealth/schwab-api'
+import { createApiClient } from '@sudowealth/schwab-api'
 import { Hono } from 'hono'
 import { logger } from '../shared/logger'
 import { type Env } from '../types/env'
-import { createSchwabAuth, redirectToSchwab } from './client'
+import { initializeSchwabAuthClient, redirectToSchwab, type CodeFlowTokenData } from './client'
 import {
 	clientIdAlreadyApproved,
 	parseRedirectApproval,
@@ -88,26 +88,50 @@ app.get('/callback', async (c) => {
 		return c.text('Missing code', 400)
 	}
 
-	// Use our SchwabAuth service
+	// Use our SchwabAuth service with token persistence
 	const redirectUri = new URL('/callback', c.req.raw.url).href
-	const auth = createSchwabAuth(c.env, redirectUri)
+	
+	// Define token storage functions for KV
+	const saveToken = async (tokenData: CodeFlowTokenData) => {
+		const userId = oauthReqInfo.clientId;
+		if (!userId) return;
+		await c.env.OAUTH_KV?.put(
+			`token:${userId}`, 
+			JSON.stringify(tokenData)
+		);
+	};
+	
+	const loadToken = async (): Promise<CodeFlowTokenData | null> => {
+		const userId = oauthReqInfo.clientId;
+		if (!userId) return null;
+		const tokenStr = await c.env.OAUTH_KV?.get(`token:${userId}`);
+		return tokenStr ? JSON.parse(tokenStr) as CodeFlowTokenData : null;
+	};
+	
+	const auth = initializeSchwabAuthClient(
+		c.env, 
+		redirectUri,
+		loadToken,
+		saveToken
+	);
 
 	try {
 		// Exchange the code for tokens
 		const tokenSet = await auth.exchangeCode(code as string)
-
-		if (!tokenSet || !tokenSet.accessToken) {
-			logger.error('Failed to get tokens', { path: '/callback' })
-			return c.text('Failed to get access token', 500)
-		}
+		
+		// Create the API client with the authenticated auth client
+		const client = createApiClient({
+			config: { environment: 'PRODUCTION' },
+			auth,
+		})
 
 		// Fetch the user info from Schwab
 		try {
-			const userPreferenceData = await trader.userPreference.getUserPreference(
-				tokenSet.accessToken,
-			)
+			const userPreferences =
+				await client.trader.userPreference.getUserPreference()
+
 			const userIdFromSchwab =
-				userPreferenceData?.streamerInfo?.[0]?.schwabClientCorrelId
+				userPreferences?.streamerInfo?.[0]?.schwabClientCorrelId
 			if (!userIdFromSchwab) {
 				logger.error('No user ID found in UserPreference', {
 					path: '/callback',
@@ -141,7 +165,14 @@ app.get('/callback', async (c) => {
 			)
 		}
 	} catch (error: any) {
-		logger.error('Token exchange failed', { path: '/callback', error })
+		logger.error('Token exchange failed', {
+			path: '/callback',
+			errorMessage: error instanceof Error ? error.message : String(error),
+			errorName: error instanceof Error ? error.name : 'Unknown',
+			errorCode: error?.code || 'no_code',
+			errorStack: error instanceof Error ? error.stack : undefined,
+			errorDetails: JSON.stringify(error),
+		})
 		return c.text('Failed to exchange authorization code for token.', 500)
 	}
 })

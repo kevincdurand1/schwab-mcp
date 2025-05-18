@@ -16,4 +16,9 @@ export interface Env {
 	 * Secret key used for cookie encryption
 	 */
 	COOKIE_ENCRYPTION_KEY: string
+
+	/**
+	 * KV namespace for storing tokens
+	 */
+	OAUTH_KV?: KVNamespace
 }

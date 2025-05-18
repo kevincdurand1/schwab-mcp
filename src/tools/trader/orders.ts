@@ -1,28 +1,32 @@
 import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { trader } from '@sudowealth/schwab-api'
-import { GetOrdersRequestQueryParams } from '@sudowealth/schwab-api/schemas'
+import { type SchwabApiClient } from '@sudowealth/schwab-api'
 import { logger } from '../../shared/logger'
 import { schwabTool } from '../../shared/utils'
 
-export function registerOrderTools(
-	server: McpServer,
-	getAccessToken: () => Promise<string>,
-) {
+export function registerOrderTools(server: McpServer, client: SchwabApiClient) {
 	server.tool(
 		'getOrders',
-		GetOrdersRequestQueryParams.shape,
+		client.schemas.GetOrdersRequestQueryParams.shape,
 		schwabTool(
-			getAccessToken,
-			GetOrdersRequestQueryParams,
-			async (token, queryParams) => {
+			client,
+			client.schemas.GetOrdersRequestQueryParams,
+			async (queryParams) => {
 				logger.info('[getOrders] Fetching orders', {
 					maxResults: queryParams.maxResults,
 					hasDateFilter:
 						!!queryParams.fromEnteredTime || !!queryParams.toEnteredTime,
 				})
 
-				const orders = await trader.orders.getOrders(token, {
-					queryParams,
+				const orders = await client.trader.orders.getOrders({
+					queryParams: {
+						maxResults: queryParams.maxResults,
+						fromEnteredTime: queryParams.fromEnteredTime
+							? new Date(queryParams.fromEnteredTime).getTime().toString()
+							: '',
+						toEnteredTime: queryParams.toEnteredTime
+							? new Date(queryParams.toEnteredTime).getTime().toString()
+							: '',
+					},
 				})
 
 				if (orders.length === 0) {

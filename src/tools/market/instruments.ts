@@ -1,26 +1,26 @@
 import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { marketData } from '@sudowealth/schwab-api'
-import { GetInstrumentsRequestQueryParamsSchema } from '@sudowealth/schwab-api/schemas'
+
+import { type SchwabApiClient } from '@sudowealth/schwab-api'
 import { logger } from '../../shared/logger'
 import { schwabTool } from '../../shared/utils'
 
 export function registerInstrumentTools(
 	server: McpServer,
-	getAccessToken: () => Promise<string>,
+	client: SchwabApiClient,
 ) {
 	server.tool(
 		'searchInstruments',
-		GetInstrumentsRequestQueryParamsSchema.shape,
+		client.schemas.GetInstrumentsRequestQueryParamsSchema.shape,
 		schwabTool(
-			getAccessToken,
-			GetInstrumentsRequestQueryParamsSchema,
-			async (token, { symbol, projection }) => {
+			client,
+			client.schemas.GetInstrumentsRequestQueryParamsSchema,
+			async ({ symbol, projection }) => {
 				logger.info('[searchInstruments] Fetching instruments', {
 					symbol,
 					projection,
 				})
 
-				const instruments = await marketData.instruments.getInstruments(token, {
+				const instruments = await client.marketData.instruments.getInstruments({
 					queryParams: { symbol, projection },
 				})
 

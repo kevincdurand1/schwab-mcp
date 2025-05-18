@@ -1,36 +1,23 @@
 import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { marketData } from '@sudowealth/schwab-api'
-import {
-	GetQuoteBySymbolIdRequestPathParamsSchema,
-	GetQuoteBySymbolIdRequestQueryParamsSchema,
-	GetQuotesRequestQueryParamsSchema,
-} from '@sudowealth/schwab-api/schemas'
+import { type SchwabApiClient } from '@sudowealth/schwab-api'
 import { z } from 'zod'
 import { logger } from '../../shared/logger'
 import { mergeShapes, schwabTool } from '../../shared/utils'
 
-// Create combined schema for getQuoteBySymbolId
-const GetQuoteBySymbolIdSchema = z.object(
-	mergeShapes(
-		GetQuoteBySymbolIdRequestPathParamsSchema.shape,
-		GetQuoteBySymbolIdRequestQueryParamsSchema.shape,
-	),
-)
-
 export function registerQuotesTools(
 	server: McpServer,
-	getAccessToken: () => Promise<string>,
+	client: SchwabApiClient,
 ) {
 	server.tool(
 		'getQuotes',
-		GetQuotesRequestQueryParamsSchema.shape,
+		client.schemas.GetQuotesRequestQueryParamsSchema.shape,
 		schwabTool(
-			getAccessToken,
-			GetQuotesRequestQueryParamsSchema,
-			async (token, { symbols, fields, indicative }) => {
+			client,
+			client.schemas.GetQuotesRequestQueryParamsSchema,
+			async ({ symbols, fields, indicative }) => {
 				logger.info('[getQuotes] Fetching quotes', { symbols, fields })
 
-				const quotesData = await marketData.quotes.getQuotes(token, {
+				const quotesData = await client.marketData.quotes.getQuotes({
 					queryParams: { symbols, fields, indicative },
 				})
 
@@ -69,19 +56,24 @@ export function registerQuotesTools(
 	server.tool(
 		'getQuoteBySymbolId',
 		{
-			...GetQuoteBySymbolIdRequestPathParamsSchema.shape,
-			...GetQuoteBySymbolIdRequestQueryParamsSchema.shape,
+			...client.schemas.GetQuoteBySymbolIdRequestPathParamsSchema.shape,
+			...client.schemas.GetQuoteBySymbolIdRequestQueryParamsSchema.shape,
 		},
 		schwabTool(
-			getAccessToken,
-			GetQuoteBySymbolIdSchema,
-			async (token, { symbol_id, fields }) => {
+			client,
+			z.object(
+				mergeShapes(
+					client.schemas.GetQuoteBySymbolIdRequestPathParamsSchema.shape,
+					client.schemas.GetQuoteBySymbolIdRequestQueryParamsSchema.shape,
+				),
+			),
+			async ({ symbol_id, fields }) => {
 				logger.info('[getQuoteBySymbolId] Fetching quote', {
 					symbol_id,
 					fields,
 				})
 
-				const quoteData = await marketData.quotes.getQuoteBySymbolId(token, {
+				const quoteData = await client.marketData.quotes.getQuoteBySymbolId({
 					pathParams: { symbol_id },
 					queryParams: { fields },
 				})
