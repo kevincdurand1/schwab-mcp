@@ -8,7 +8,9 @@ import {
 import { DurableMCP } from 'workers-mcp'
 import { SchwabHandler } from './auth'
 import { type CodeFlowTokenData, type SchwabCodeFlowAuth } from './auth/client'
+import { TokenManager } from './auth/tokenManager'
 import { logger } from './shared/logger'
+import { initializeTokenManager, withTokenAuth } from './shared/utils'
 import {
 	registerAccountTools,
 	registerInstrumentTools,
@@ -38,6 +40,8 @@ type Props = {
 
 export class MyMCP extends DurableMCP<Props, Env> {
 	private tokenManager!: SchwabCodeFlowAuth
+	private centralTokenManager!: TokenManager
+	private client!: any
 
 	server = new McpServer({
 		name: 'Schwab MCP',
@@ -50,19 +54,39 @@ export class MyMCP extends DurableMCP<Props, Env> {
 			this.props.refreshToken &&
 			this.props.expiresAt
 		) {
-			return {
+			const tokenData = {
 				accessToken: this.props.accessToken,
 				refreshToken: this.props.refreshToken,
 				expiresAt: this.props.expiresAt,
 			}
+
+			logger.info('Loaded token data from props', {
+				hasAccessToken: !!tokenData.accessToken,
+				expiresIn:
+					Math.floor((tokenData.expiresAt - Date.now()) / 1000) + ' seconds',
+			})
+
+			return tokenData
 		}
+		logger.info('No token data found in props')
 		return null
 	}
 
 	private async saveTokenData(tokenData: CodeFlowTokenData): Promise<void> {
+		logger.info('Saving token data to props', {
+			hasAccessToken: !!tokenData.accessToken,
+			hasRefreshToken: !!tokenData.refreshToken,
+			expiresIn: tokenData.expiresAt
+				? Math.floor((tokenData.expiresAt - Date.now()) / 1000) + ' seconds'
+				: 'unknown',
+		})
+
 		this.props.accessToken = tokenData.accessToken
 		this.props.refreshToken = tokenData.refreshToken
 		this.props.expiresAt = tokenData.expiresAt
+
+		// Force props to persist by making a shallow copy
+		this.props = { ...this.props }
 	}
 
 	async init() {
@@ -90,18 +114,22 @@ export class MyMCP extends DurableMCP<Props, Env> {
 			// Store auth in tokenManager
 			this.tokenManager = auth as unknown as SchwabCodeFlowAuth
 
+			// Create centralized token manager and make it available to utilities
+			this.centralTokenManager = new TokenManager(this.tokenManager)
+			initializeTokenManager(this.centralTokenManager)
+
 			// Create API client with auth
-			const client = createApiClient({
+			this.client = createApiClient({
 				config: { environment: 'PRODUCTION' },
 				auth,
 			})
 
 			// Set up debug info for requests
-			if ((client as any).axiosInstance) {
+			if ((this.client as any).axiosInstance) {
 				logger.info('Adding request/response interceptors for debugging')
 
 				// Add request interceptor
-				;(client as any).axiosInstance.interceptors.request.use(
+				;(this.client as any).axiosInstance.interceptors.request.use(
 					(config: any) => {
 						logger.info(
 							`API Request: ${config.method.toUpperCase()} ${config.url}`,
@@ -119,7 +147,7 @@ export class MyMCP extends DurableMCP<Props, Env> {
 				)
 
 				// Add response interceptor
-				;(client as any).axiosInstance.interceptors.response.use(
+				;(this.client as any).axiosInstance.interceptors.response.use(
 					(response: any) => {
 						logger.info(
 							`API Response: ${response.status} ${response.statusText}`,
@@ -150,7 +178,7 @@ export class MyMCP extends DurableMCP<Props, Env> {
 			}
 
 			// Register all tools and track them
-			await this.registerTools(client)
+			await this.registerTools(this.client)
 
 			// Override JSON-RPC handler to add parameter handling
 			this.setupCustomRpcHandler()
@@ -706,155 +734,55 @@ export class MyMCP extends DurableMCP<Props, Env> {
 		}
 	}
 
-	// Helper to ensure we have a valid token before making API calls
+	// Replace the existing ensureValidToken method with one that uses the centralized manager
 	private async ensureValidToken(): Promise<boolean> {
+		return this.centralTokenManager.ensureValidToken()
+	}
+
+	private makeApiCall = async <T>(
+		method: (client: any) => Promise<T>,
+	): Promise<T> => {
 		try {
-			// Try using client.debugAuth if available through our separate Schwab API client instance
-			// Get the client from the currently registered tools
-			let apiClient: any = null
-
-			// @ts-ignore - Accessing internal property for debugging
-			const allTools = this.server.tools || {}
-
-			// Look for a tool that might have a reference to the API client
-			for (const toolName of Object.keys(allTools)) {
-				if (toolName.startsWith('accounts') || toolName.startsWith('quotes')) {
-					// @ts-ignore - Accessing internal property
-					const toolHandler = allTools[toolName]?.handler
-					if (toolHandler && typeof toolHandler === 'function') {
-						// These handlers are created by schwabTool which has access to client
-						// Try to extract client from the scope
-						try {
-							// Extract client from closure if possible
-							const clientExtractor = new Function('return this.client')
-							apiClient = clientExtractor.call(toolHandler)
-						} catch (e) {
-							// Ignore extraction errors
-						}
-
-						if (apiClient) break
-					}
-				}
-			}
-
-			// If we found a client with debugAuth, use it
-			if (apiClient && apiClient.debugAuth) {
-				logger.info('Using enhanced debugAuth for token validation')
-
-				try {
-					const diagnostics = await apiClient.debugAuth()
-
-					logger.info('Token diagnostics', {
-						hasToken: diagnostics.tokenStatus.hasAccessToken,
-						isExpired: diagnostics.tokenStatus.isExpired,
-						expiresIn: diagnostics.tokenStatus.expiresInSeconds + ' seconds',
-						authType: diagnostics.authManagerType,
-						supportsRefresh: diagnostics.supportsRefresh,
-					})
-
-					// If token is expired or will expire soon (within 5 minutes)
-					if (
-						diagnostics.tokenStatus.isExpired ||
-						diagnostics.tokenStatus.expiresInSeconds < 300
-					) {
-						logger.info(
-							'Token expired or expiring soon, attempting refresh with debugAuth',
-						)
-
-						// Force a token refresh and get updated diagnostics
-						const refreshResult = await apiClient.debugAuth({
-							forceRefresh: true,
-						})
-
-						// Update our stored tokens from the refreshed result if available
-						if (
-							refreshResult.tokenStatus.refreshSuccessful &&
-							apiClient.auth &&
-							typeof apiClient.auth.getTokenData === 'function'
-						) {
-							const refreshedTokenData = await apiClient.auth.getTokenData()
-							if (refreshedTokenData) {
-								// Update our stored tokens
-								this.props.accessToken = refreshedTokenData.accessToken
-								if (refreshedTokenData.refreshToken) {
-									this.props.refreshToken = refreshedTokenData.refreshToken
-								}
-								if (refreshedTokenData.expiresAt) {
-									this.props.expiresAt = refreshedTokenData.expiresAt
-								}
-								// Force props to persist
-								this.props = { ...this.props }
-
-								logger.info('Updated stored tokens from refresh')
-							}
-						}
-
-						logger.info('Token refresh result', {
-							success: refreshResult.tokenStatus.refreshSuccessful ?? false,
-							newExpiresIn:
-								refreshResult.tokenStatus.expiresInSeconds + ' seconds',
-						})
-
-						return refreshResult.tokenStatus.refreshSuccessful ?? false
-					}
-
-					// Token is valid
-					return (
-						diagnostics.tokenStatus.hasAccessToken &&
-						!diagnostics.tokenStatus.isExpired
-					)
-				} catch (diagError) {
-					logger.error('Error using debugAuth', { error: diagError })
-					// Fall back to standard token check
-				}
-			}
-
-			// Check if we have tokens at all
-			if (!this.props.accessToken || !this.props.refreshToken) {
-				logger.warn('No tokens available - authentication required')
-				return false
-			}
-
-			// Check if token is expired or will expire soon (within 60 seconds)
-			const now = Date.now()
-			const tokenExpiry = this.props.expiresAt
-			const bufferTime = 60 * 1000 // 60 seconds
-
-			// Log token details for debugging
-			logger.info('Token status check', {
-				now,
-				tokenExpiry,
-				expiresIn: Math.floor((tokenExpiry - now) / 1000),
-				hasAccessToken: !!this.props.accessToken,
-				accessTokenPrefix: this.props.accessToken
-					? this.props.accessToken.substring(0, 10) + '...'
-					: null,
-				hasRefreshToken: !!this.props.refreshToken,
+			const methodName = method.name || 'unnamed function'
+			logger.info(`Making API call using ${methodName}`, {
+				clientExists: !!this.client,
+				tokenManagerExists: !!this.centralTokenManager,
 			})
 
-			if (now + bufferTime >= tokenExpiry) {
-				logger.info('Token expired or expiring soon, attempting refresh')
-
-				// Use the tokenManager to refresh the token
-				const refreshed = await this.tokenManager.refresh()
-
-				if (refreshed) {
-					logger.info('Token refreshed successfully', {
-						newExpiresAt: this.props.expiresAt,
-						expiresIn: Math.floor((this.props.expiresAt - Date.now()) / 1000),
-					})
-					return true
-				} else {
-					logger.warn('Token refresh failed')
-					return false
+			// Do an explicit token check before the API call
+			if (this.centralTokenManager) {
+				const tokenValid = await this.centralTokenManager.ensureValidToken()
+				if (!tokenValid) {
+					logger.error(
+						`Token validation failed before API call to ${methodName}`,
+					)
+					throw new Error('Failed to get valid token for API request')
 				}
+
+				// Get the current token for logging
+				// Use the centralTokenManager to get token data if available
+				const tokenData = await this.centralTokenManager.getAccessToken()
+				logger.info(`Token state before API call to ${methodName}`, {
+					hasAccessToken: !!tokenData,
+					accessTokenPrefix: tokenData
+						? `${tokenData.substring(0, 10)}...`
+						: 'none',
+					// We can't easily get expiration here, so just note if we have a token
+					hasToken: !!tokenData,
+				})
 			}
 
-			// Token is valid
-			return true
+			// Use our withTokenAuth wrapper for better error logging and handling
+			return await withTokenAuth(this.client, method, this.client)
 		} catch (error) {
-			logger.error('Error ensuring valid token', { error })
-			return false
+			logger.error('API call failed', {
+				methodName: method.name || 'unnamed function',
+				error: error instanceof Error ? error.message : String(error),
+				errorType:
+					error instanceof Error ? error.constructor.name : typeof error,
+				stack: error instanceof Error ? error.stack : undefined,
+			})
+			throw error
 		}
 	}
 }

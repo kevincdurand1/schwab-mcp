@@ -14,7 +14,8 @@ import { type Env } from '../types/env'
 
 // Define the stricter token type required by CODE_FLOW oauthConfig
 // It must have refreshToken: string and expiresAt: number
-export type CodeFlowTokenData = TokenData & {
+export interface CodeFlowTokenData extends TokenData {
+	accessToken: string
 	refreshToken: string
 	expiresAt: number
 }
@@ -37,6 +38,15 @@ export interface SchwabCodeFlowAuth {
 	onRefresh?(callback: (tokenData: TokenData) => void): void
 	isRefreshTokenNearingExpiration?(): boolean
 	// Potentially other methods from ITokenLifecycleManager or a base AuthClient type from the library
+
+	loadTokenHook?: () => Promise<CodeFlowTokenData | null>
+	saveTokenHook?: (tokenData: CodeFlowTokenData) => Promise<void>
+	getTokenData: () => Promise<TokenData | null>
+	refresh: (
+		refreshToken?: string,
+		options?: { force?: boolean },
+	) => Promise<any>
+	supportsRefresh: () => boolean
 }
 
 /**

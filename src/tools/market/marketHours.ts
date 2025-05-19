@@ -69,7 +69,7 @@ export function registerMarketHoursTools(
 			...client.schemas.GetMarketHoursByMarketIdRequestQueryParamsSchema.shape,
 			...client.schemas.GetMarketHoursByMarketIdRequestPathParamsSchema.shape,
 		},
-		async (args, extra) =>
+		async (args) =>
 			await schwabTool(
 				client,
 				z.object(

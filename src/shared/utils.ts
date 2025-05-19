@@ -1,6 +1,16 @@
 import { type SchwabApiClient } from '@sudowealth/schwab-api'
 import { type z } from 'zod'
+import { type TokenManager } from '../auth/tokenManager'
 import { logger } from './logger'
+
+// Store a reference to the token manager
+let tokenManagerInstance: TokenManager | null = null
+
+// Function to initialize the token manager reference
+export function initializeTokenManager(manager: TokenManager) {
+	logger.info('[utils] Initializing token manager', { hasManager: !!manager })
+	tokenManagerInstance = manager
+}
 
 /**
  * Helper function to ensure a valid token and explicitly set Authorization header if needed
@@ -12,102 +22,48 @@ export async function ensureValidToken(
 	client: SchwabApiClient,
 ): Promise<boolean> {
 	try {
-		// Run diagnostics to get comprehensive token status
-		const diagnostics = await (client as any).debugAuth?.()
-
-		if (diagnostics) {
-			logger.info('Token diagnostics', {
-				hasToken: diagnostics.tokenStatus.hasAccessToken,
-				isExpired: diagnostics.tokenStatus.isExpired,
-				expiresIn: diagnostics.tokenStatus.expiresInSeconds + ' seconds',
-				authType: diagnostics.authManagerType,
-				supportsRefresh: diagnostics.supportsRefresh,
-				environment: diagnostics.environment?.apiEnvironment,
-			})
-
-			// If token is expired or will expire soon (within 5 minutes)
-			if (
-				diagnostics.tokenStatus.isExpired ||
-				diagnostics.tokenStatus.expiresInSeconds < 300
-			) {
-				logger.info('Token expired or expiring soon, attempting refresh')
-
-				// Force a token refresh and get updated diagnostics
-				const refreshResult = await (client as any).debugAuth?.({
-					forceRefresh: true,
-				})
-
-				logger.info('Token refresh result', {
-					success: refreshResult.tokenStatus.refreshSuccessful ?? false,
-					newExpiresIn: refreshResult.tokenStatus.expiresInSeconds + ' seconds',
-				})
-
-				return refreshResult.tokenStatus.refreshSuccessful ?? false
-			}
-
-			// Token is valid
-			return (
-				diagnostics.tokenStatus.hasAccessToken &&
-				!diagnostics.tokenStatus.isExpired
-			)
+		// If we have a centralized token manager, use it
+		if (tokenManagerInstance) {
+			logger.info('[utils] Using centralized token manager')
+			return tokenManagerInstance.ensureValidToken()
 		}
 
-		// Fall back to old token check logic if debugAuth isn't available
-		// Get current token
-		const tokenData = await (client.auth as any).getTokenData?.()
+		logger.warn(
+			'[utils] No centralized token manager available, using legacy code path',
+		)
 
-		if (!tokenData?.accessToken) {
-			logger.error('No access token available')
+		// Fallback to client's own token management
+		try {
+			// Since we don't know the exact structure of client.auth,
+			// use a safe approach to try to get the token
+			const auth = client.auth as any
+			let token = null
+
+			if (auth && typeof auth.getTokenData === 'function') {
+				token = await auth.getTokenData()
+			} else if (auth && typeof auth.getToken === 'function') {
+				token = await auth.getToken()
+				// If the token is just a string, convert it to an object
+				if (typeof token === 'string') {
+					token = { accessToken: token }
+				}
+			}
+
+			const hasToken = !!token?.accessToken
+			logger.info('[utils] Client auth token result', { hasToken })
+			return hasToken
+		} catch (authError) {
+			logger.error('[utils] Error accessing client auth methods', {
+				error:
+					authError instanceof Error ? authError.message : String(authError),
+			})
 			return false
 		}
-
-		// Check if token is expired or will expire soon
-		if (tokenData.expiresAt && Date.now() > tokenData.expiresAt - 60000) {
-			// If we have a refresh token, try to refresh
-			if (tokenData.refreshToken) {
-				logger.info('Token expired or expiring soon, attempting refresh')
-				try {
-					await (client.auth as any).refresh(undefined, { force: true })
-					logger.info('Token refresh successful')
-
-					// Get the updated token
-					const refreshedToken = await (client.auth as any).getTokenData?.()
-					if (!refreshedToken?.accessToken) {
-						logger.error('No access token available after refresh')
-						return false
-					}
-
-					// Explicitly set the Authorization header on the axios instance if it exists
-					if ((client as any).axiosInstance) {
-						;(client as any).axiosInstance.defaults.headers.common[
-							'Authorization'
-						] = `Bearer ${refreshedToken.accessToken}`
-						logger.info(
-							'Explicitly set Authorization header with refreshed token',
-						)
-					}
-
-					return true
-				} catch (error) {
-					logger.error('Token refresh failed', { error })
-					return false
-				}
-			} else {
-				logger.error('Token expired and no refresh token available')
-				return false
-			}
-		}
-
-		// If token is valid, explicitly set the Authorization header on the axios instance if it exists
-		if ((client as any).axiosInstance) {
-			;(client as any).axiosInstance.defaults.headers.common['Authorization'] =
-				`Bearer ${tokenData.accessToken}`
-			logger.info('Explicitly set Authorization header with current token')
-		}
-
-		return true
 	} catch (error) {
-		logger.error('Error ensuring valid token', { error })
+		logger.error('[utils] Error ensuring valid token', {
+			error: error instanceof Error ? error.message : String(error),
+			stack: error instanceof Error ? error.stack : 'No stack trace',
+		})
 		return false
 	}
 }
@@ -140,32 +96,38 @@ export function schwabTool<
 
 		// Run diagnostics before API call
 		try {
-			// Debug token state with the new diagnostics tool
-			if ((client as any).debugAuth) {
-				const diagnostics = await (client as any).debugAuth()
-				logger.info('Token state before API call', {
-					hasToken: diagnostics.tokenStatus.hasAccessToken,
-					isExpired: diagnostics.tokenStatus.isExpired,
-					expiresIn: diagnostics.tokenStatus.expiresInSeconds + ' seconds',
-					environment: diagnostics.environment?.apiEnvironment,
-				})
+			// Use centralized token manager if available for token validation
+			if (tokenManagerInstance) {
+				await tokenManagerInstance.ensureValidToken()
 			} else {
-				// Fall back to old diagnostics if debugAuth not available
-				const tokenData = await (client.auth as any).getTokenData?.()
-				logger.info('Token state before API call', {
-					hasAccessToken: !!tokenData?.accessToken,
-					hasRefreshToken: !!tokenData?.refreshToken,
-					tokenExpired: tokenData?.expiresAt
-						? Date.now() > tokenData.expiresAt
-						: 'unknown',
-					expiresIn: tokenData?.expiresAt
-						? Math.floor((tokenData.expiresAt - Date.now()) / 1000) + ' seconds'
-						: 'unknown',
-				})
-			}
+				// Debug token state with the new diagnostics tool
+				if ((client as any).debugAuth) {
+					const diagnostics = await (client as any).debugAuth()
+					logger.info('Token state before API call', {
+						hasToken: diagnostics.tokenStatus.hasAccessToken,
+						isExpired: diagnostics.tokenStatus.isExpired,
+						expiresIn: diagnostics.tokenStatus.expiresInSeconds + ' seconds',
+						environment: diagnostics.environment?.apiEnvironment,
+					})
+				} else {
+					// Fall back to old diagnostics if debugAuth not available
+					const tokenData = await (client.auth as any).getTokenData?.()
+					logger.info('Token state before API call', {
+						hasAccessToken: !!tokenData?.accessToken,
+						hasRefreshToken: !!tokenData?.refreshToken,
+						tokenExpired: tokenData?.expiresAt
+							? Date.now() > tokenData.expiresAt
+							: 'unknown',
+						expiresIn: tokenData?.expiresAt
+							? Math.floor((tokenData.expiresAt - Date.now()) / 1000) +
+								' seconds'
+							: 'unknown',
+					})
+				}
 
-			// Ensure we have a valid token and authorization header is set
-			await ensureValidToken(client)
+				// Ensure we have a valid token and authorization header is set
+				await ensureValidToken(client)
+			}
 		} catch (tokenError) {
 			logger.error('Error checking token state', { error: tokenError })
 		}
@@ -186,4 +148,81 @@ export function mergeShapes<T extends z.ZodRawShape[]>(
 	...shapes: T
 ): z.ZodRawShape {
 	return shapes.reduce((acc, shape) => ({ ...acc, ...shape }), {})
+}
+
+/**
+ * Wraps an API request with token auth
+ *
+ * @param client The Schwab API client
+ * @param fn The API function to call
+ * @param args Arguments to pass to the API function
+ * @returns The result of the API call
+ */
+export async function withTokenAuth<T, Args extends any[]>(
+	client: SchwabApiClient,
+	fn: (...args: Args) => Promise<T>,
+	...args: Args
+): Promise<T> {
+	try {
+		// Ensure we have a valid token before making the request
+		logger.info('[utils] withTokenAuth called')
+		const tokenValid = await ensureValidToken(client)
+
+		if (!tokenValid) {
+			logger.error('[utils] Failed to get valid token for API request')
+			throw new Error('Failed to get valid token for API request')
+		}
+
+		logger.info('[utils] Token valid, proceeding with API request')
+
+		// Create a response hook to detect auth failures
+		const originalFetch = globalThis.fetch
+		globalThis.fetch = async (url, options) => {
+			const response = await originalFetch(url, options)
+
+			// Check for auth failures and log them
+			if (response.status === 401) {
+				logger.error('[utils] 401 Unauthorized response from API', {
+					url: url.toString(),
+					hasAuthHeader: options?.headers && 'Authorization' in options.headers,
+					rawHeaders: options?.headers
+						? JSON.stringify(options.headers)
+						: 'none',
+				})
+
+				// Try to get details from the response
+				try {
+					const clonedResponse = response.clone()
+					const responseText = await clonedResponse.text()
+					logger.error('[utils] 401 response details', {
+						responseText,
+						responseSize: responseText.length,
+					})
+				} catch (e) {
+					logger.error('[utils] Could not read 401 response body', {
+						error: e instanceof Error ? e.message : String(e),
+					})
+				}
+			}
+
+			return response
+		}
+
+		try {
+			// Attempt the API call
+			const result = await fn(...args)
+			logger.info('[utils] API request successful')
+			return result
+		} finally {
+			// Restore original fetch
+			globalThis.fetch = originalFetch
+		}
+	} catch (error) {
+		logger.error('[utils] API request failed', {
+			error: error instanceof Error ? error.message : String(error),
+			stack: error instanceof Error ? error.stack : 'No stack trace',
+			args: JSON.stringify(args),
+		})
+		throw error
+	}
 }
