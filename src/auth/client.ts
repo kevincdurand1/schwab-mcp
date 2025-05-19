@@ -12,14 +12,18 @@ import { type BlankInput } from 'hono/types'
 import { logger } from '../shared/logger'
 import { type Env } from '../types/env'
 
-// Define the stricter token type required by AuthStrategy.ENHANCED
+/**
+ * Token data structure required by Schwab enhanced authentication strategy
+ */
 export interface CodeFlowTokenData extends TokenData {
 	accessToken: string
 	refreshToken: string
 	expiresAt: number
 }
 
-// Define interfaces for the enhanced token management features
+/**
+ * Event emitted during token lifecycle events
+ */
 export interface TokenLifecycleEvent {
 	type: 'save' | 'load' | 'refresh' | 'expire' | 'error'
 	tokenData?: TokenData | null
@@ -27,6 +31,9 @@ export interface TokenLifecycleEvent {
 	timestamp: number
 }
 
+/**
+ * Result of token validation operations
+ */
 export interface TokenValidationResult {
 	valid: boolean
 	canRefresh: boolean
@@ -34,12 +41,18 @@ export interface TokenValidationResult {
 	reason?: string
 }
 
+/**
+ * Result of token refresh operations
+ */
 export interface TokenRefreshResult {
 	success: boolean
 	tokenData?: TokenData | null
 	error?: Error | null
 }
 
+/**
+ * Result of reconnection operations
+ */
 export interface ReconnectionResult {
 	success: boolean
 	tokenRestored: boolean
@@ -47,7 +60,9 @@ export interface ReconnectionResult {
 	error?: Error | null
 }
 
-// Define the interface for the enhanced auth client returned by createSchwabAuth
+/**
+ * Enhanced Schwab authentication client interface
+ */
 export interface SchwabCodeFlowAuth {
 	getAuthorizationUrl(options?: any): {
 		authUrl: string
@@ -77,6 +92,12 @@ export interface SchwabCodeFlowAuth {
 
 /**
  * Creates a Schwab Auth client with enhanced features
+ *
+ * @param env Environment variables containing Schwab API credentials
+ * @param redirectUri OAuth callback URI
+ * @param load Function to load tokens from storage
+ * @param save Function to save tokens to storage
+ * @returns Initialized Schwab auth client
  */
 export function initializeSchwabAuthClient(
 	env: Env,
@@ -126,6 +147,11 @@ export function initializeSchwabAuthClient(
 
 /**
  * Redirects the user to Schwab's authorization page
+ *
+ * @param c Hono context
+ * @param oauthReqInfo OAuth request information
+ * @param headers Optional headers to include in the response
+ * @returns Redirect response to Schwab's authorization page
  */
 export async function redirectToSchwab(
 	c: Context<
@@ -140,26 +166,31 @@ export async function redirectToSchwab(
 	oauthReqInfo: AuthRequest,
 	headers: HeadersInit = {},
 ): Promise<Response> {
-	const redirectUri = new URL('/callback', c.req.raw.url).href
-	const auth = initializeSchwabAuthClient(c.env, redirectUri)
+	try {
+		const redirectUri = new URL('/callback', c.req.raw.url).href
+		const auth = initializeSchwabAuthClient(c.env, redirectUri)
 
-	// Get the authorization URL
-	const { authUrl } = auth.getAuthorizationUrl()
+		// Get the authorization URL
+		const { authUrl } = auth.getAuthorizationUrl()
 
-	// Add state parameter with encoded oauthReqInfo
-	const url = new URL(authUrl)
-	url.searchParams.set('state', btoa(JSON.stringify(oauthReqInfo)))
+		// Add state parameter with encoded oauthReqInfo
+		const url = new URL(authUrl)
+		url.searchParams.set('state', btoa(JSON.stringify(oauthReqInfo)))
 
-	// Create redirect response with any additional headers
-	if (Object.keys(headers).length > 0) {
-		return new Response(null, {
-			status: 302,
-			headers: {
-				Location: url.href,
-				...headers,
-			},
-		})
-	} else {
-		return Response.redirect(url.href, 302)
+		// Create redirect response with any additional headers
+		if (Object.keys(headers).length > 0) {
+			return new Response(null, {
+				status: 302,
+				headers: {
+					Location: url.href,
+					...headers,
+				},
+			})
+		} else {
+			return Response.redirect(url.href, 302)
+		}
+	} catch (error) {
+		logger.error('Error creating authorization redirect', { error })
+		return new Response('Error creating authorization URL', { status: 500 })
 	}
 }

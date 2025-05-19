@@ -23,16 +23,12 @@ import {
 	registerTransactionTools,
 } from './tools'
 
-// Import middleware directly
-
 type Props = {
 	name: string
 	email: string
 	accessToken: string
 	refreshToken: string
 	expiresAt: number
-	// Track registered tools to ensure persistence
-	registeredTools: string[]
 }
 
 export class MyMCP extends DurableMCP<Props, Env> {
@@ -48,11 +44,6 @@ export class MyMCP extends DurableMCP<Props, Env> {
 	async init() {
 		try {
 			logger.info('Initializing Schwab MCP server')
-
-			// Initialize registeredTools array if not present
-			if (!this.props.registeredTools) {
-				this.props.registeredTools = []
-			}
 
 			const redirectUri = 'https://schwab-mcp.dyeoman2.workers.dev/callback'
 
@@ -110,12 +101,18 @@ export class MyMCP extends DurableMCP<Props, Env> {
 				})
 			}
 
-			// Set up debug info for requests
-			if ((this.client as any).axiosInstance) {
+			// Set up debug info for requests if axios is available
+			if (
+				this.client &&
+				typeof this.client === 'object' &&
+				'axiosInstance' in this.client
+			) {
+				const axiosInstance = (this.client as any).axiosInstance
+
 				logger.info('Adding request/response interceptors for debugging')
 
 				// Add request interceptor
-				;(this.client as any).axiosInstance.interceptors.request.use(
+				axiosInstance.interceptors.request.use(
 					(config: any) => {
 						logger.info(
 							`API Request: ${config.method.toUpperCase()} ${config.url}`,
@@ -133,7 +130,7 @@ export class MyMCP extends DurableMCP<Props, Env> {
 				)
 
 				// Add response interceptor
-				;(this.client as any).axiosInstance.interceptors.response.use(
+				axiosInstance.interceptors.response.use(
 					(response: any) => {
 						logger.info(
 							`API Response: ${response.status} ${response.statusText}`,
@@ -182,9 +179,6 @@ export class MyMCP extends DurableMCP<Props, Env> {
 		registerPriceHistoryTools(this.server, client)
 		registerQuotesTools(this.server, client)
 		registerTransactionTools(this.server, client)
-
-		// Force props to persist without using save() directly
-		this.props = { ...this.props }
 	}
 
 	// Simplified reconnection method using enhanced features
@@ -228,7 +222,7 @@ export class MyMCP extends DurableMCP<Props, Env> {
 
 export default new OAuthProvider({
 	apiRoute: '/sse',
-	// @ts-ignore
+	// @ts-ignore - Needed because of type mismatch in the library
 	apiHandler: MyMCP.mount('/sse') as any,
 	defaultHandler: SchwabHandler as any,
 	authorizeEndpoint: '/authorize',
