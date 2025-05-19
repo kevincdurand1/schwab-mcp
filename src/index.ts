@@ -10,7 +10,7 @@ import { SchwabHandler } from './auth'
 import { type CodeFlowTokenData, type SchwabCodeFlowAuth } from './auth/client'
 import { TokenManager } from './auth/tokenManager'
 import { logger } from './shared/logger'
-import { initializeTokenManager, withTokenAuth } from './shared/utils'
+import { initializeTokenManager } from './shared/utils'
 import {
 	registerAccountTools,
 	registerInstrumentTools,
@@ -24,9 +24,6 @@ import {
 } from './tools'
 
 // Import middleware directly
-
-// Type for diagnostics content
-type DiagnosticsContent = Array<{ type: string; text: string }>
 
 type Props = {
 	name: string
@@ -85,7 +82,7 @@ export class MyMCP extends DurableMCP<Props, Env> {
 		this.props.refreshToken = tokenData.refreshToken
 		this.props.expiresAt = tokenData.expiresAt
 
-		// Force props to persist by making a shallow copy
+		// Force props to persist by making a shallow copy and triggering automatic persistence
 		this.props = { ...this.props }
 	}
 
@@ -100,29 +97,39 @@ export class MyMCP extends DurableMCP<Props, Env> {
 
 			const redirectUri = 'https://schwab-mcp.dyeoman2.workers.dev/callback'
 
-			const auth = createSchwabAuth({
-				strategy: AuthStrategy.CODE_FLOW,
-				oauthConfig: {
-					clientId: this.env.SCHWAB_CLIENT_ID,
-					clientSecret: this.env.SCHWAB_CLIENT_SECRET,
-					redirectUri: redirectUri,
-					save: async (tokens) => this.saveTokenData(tokens),
-					load: async () => this.loadTokenData(),
-				},
-			})
+			// Preserve existing auth if present during reconnection
+			if (this.tokenManager && this.client && this.centralTokenManager) {
+				logger.info(
+					'Auth components already exist, skipping recreation during init',
+				)
+			} else {
+				// Create fresh auth components
+				logger.info('Creating auth components')
 
-			// Store auth in tokenManager
-			this.tokenManager = auth as unknown as SchwabCodeFlowAuth
+				const auth = createSchwabAuth({
+					strategy: AuthStrategy.CODE_FLOW,
+					oauthConfig: {
+						clientId: this.env.SCHWAB_CLIENT_ID,
+						clientSecret: this.env.SCHWAB_CLIENT_SECRET,
+						redirectUri: redirectUri,
+						save: async (tokens) => this.saveTokenData(tokens),
+						load: async () => this.loadTokenData(),
+					},
+				})
 
-			// Create centralized token manager and make it available to utilities
-			this.centralTokenManager = new TokenManager(this.tokenManager)
-			initializeTokenManager(this.centralTokenManager)
+				// Store auth in tokenManager
+				this.tokenManager = auth as unknown as SchwabCodeFlowAuth
 
-			// Create API client with auth
-			this.client = createApiClient({
-				config: { environment: 'PRODUCTION' },
-				auth,
-			})
+				// Create centralized token manager and make it available to utilities
+				this.centralTokenManager = new TokenManager(this.tokenManager)
+				initializeTokenManager(this.centralTokenManager)
+
+				// Create API client with auth
+				this.client = createApiClient({
+					config: { environment: 'PRODUCTION' },
+					auth,
+				})
+			}
 
 			// Set up debug info for requests
 			if ((this.client as any).axiosInstance) {
@@ -188,286 +195,7 @@ export class MyMCP extends DurableMCP<Props, Env> {
 		}
 	}
 
-	// Helper to register a tool and track it in props
-	private registerTool(
-		name: string,
-		params: Record<string, any>,
-		handler: any,
-	) {
-		// Register the tool with the server
-		this.server.tool(name, params, handler)
-
-		// Track the tool if not already tracked
-		if (!this.props.registeredTools.includes(name)) {
-			this.props.registeredTools.push(name)
-			logger.info(`Tool registered: ${name}`)
-		}
-	}
-
 	private async registerTools(client: any) {
-		// Register diagnostic tools
-		this.registerTool('echo', { message: 'string?' }, async (args: any) => {
-			// Extract message from args, dealing with potential system properties contamination
-			let message
-
-			// Try to extract message directly from args
-			if (args && typeof args === 'object') {
-				// Check if message is directly in the args object
-				if ('message' in args) {
-					message = args.message
-				}
-				// If not, check if there are nested parameters
-				else if (
-					'params' in args &&
-					args.params &&
-					typeof args.params === 'object' &&
-					'message' in args.params
-				) {
-					message = args.params.message
-				} else if (
-					'arguments' in args &&
-					args.arguments &&
-					typeof args.arguments === 'object' &&
-					'message' in args.arguments
-				) {
-					message = args.arguments.message
-				}
-			}
-
-			logger.info('Echo tool called', {
-				message,
-				rawArgs: args,
-				argsType: typeof args,
-				hasMessage:
-					args && typeof args === 'object' ? 'message' in args : false,
-				argsAsJson: JSON.stringify(args),
-			})
-
-			return {
-				content: [
-					{
-						type: 'text',
-						text: `Echo: ${message || '[No message provided]'}`,
-					},
-					{
-						type: 'text',
-						text: `Server time: ${new Date().toISOString()}`,
-					},
-					{
-						type: 'text',
-						text: `Registered tools (${this.props.registeredTools.length}): ${this.props.registeredTools.join(', ')}`,
-					},
-				],
-			}
-		})
-
-		// System info tool
-		this.registerTool('systemInfo', {}, async () => {
-			logger.info('System info tool called')
-			return {
-				content: [
-					{
-						type: 'text',
-						text: `Server info: Schwab MCP 0.0.1`,
-					},
-					{
-						type: 'text',
-						text: `Registered tools (${this.props.registeredTools.length}): ${this.props.registeredTools.join(', ')}`,
-					},
-					{
-						type: 'text',
-						text: `Current time: ${new Date().toISOString()}`,
-					},
-				],
-			}
-		})
-
-		// Authentication status checker tool with enhanced diagnostics
-		this.registerTool('checkAuth', {}, async () => {
-			logger.info('Auth check tool called')
-
-			// Basic token info
-			const now = Date.now()
-			const tokenExpiry = this.props.expiresAt || 0
-			const expiresIn = Math.floor((tokenExpiry - now) / 1000)
-			const hasValidToken = await this.ensureValidToken()
-
-			// Enhanced diagnostics using debugAuth if available
-			let diagnosticsContent: DiagnosticsContent = []
-			try {
-				if (client.debugAuth) {
-					const diagnostics = await client.debugAuth()
-					diagnosticsContent = [
-						{
-							type: 'text',
-							text: `Auth Manager Type: ${diagnostics.authManagerType || 'Unknown'}`,
-						},
-						{
-							type: 'text',
-							text: `Supports Refresh: ${diagnostics.supportsRefresh ? 'Yes' : 'No'}`,
-						},
-						{
-							type: 'text',
-							text: `Environment: ${diagnostics.environment?.apiEnvironment || 'Unknown'}`,
-						},
-						{
-							type: 'text',
-							text: `Auth Headers Valid: ${diagnostics.authHeadersValid ? 'Yes' : 'No'}`,
-						},
-						{
-							type: 'text',
-							text: `Token Status: ${JSON.stringify(diagnostics.tokenStatus, null, 2)}`,
-						},
-					]
-				}
-			} catch (error) {
-				logger.error('Error getting auth diagnostics', { error })
-				diagnosticsContent = [
-					{
-						type: 'text',
-						text: `Error getting enhanced diagnostics: ${(error as Error).message}`,
-					},
-				]
-			}
-
-			return {
-				content: [
-					{
-						type: 'text',
-						text: `Authentication Status Check:`,
-					},
-					{
-						type: 'text',
-						text: `Has access token: ${!!this.props.accessToken}`,
-					},
-					{
-						type: 'text',
-						text: `Has refresh token: ${!!this.props.refreshToken}`,
-					},
-					{
-						type: 'text',
-						text: `Token expires in: ${expiresIn > 0 ? `${expiresIn} seconds` : 'Expired'}`,
-					},
-					{
-						type: 'text',
-						text: `Token status: ${hasValidToken ? 'Valid' : 'Invalid or expired'}`,
-					},
-					{
-						type: 'text',
-						text: `Current time: ${new Date().toISOString()}`,
-					},
-					{
-						type: 'text',
-						text: `Expiry time: ${new Date(tokenExpiry).toISOString()}`,
-					},
-					...diagnosticsContent,
-				],
-			}
-		})
-
-		// Add a dedicated debug auth tool for detailed diagnostics
-		this.registerTool(
-			'debugAuth',
-			{ forceRefresh: 'boolean?' },
-			async (args: any) => {
-				logger.info('Debug auth tool called', { args })
-
-				try {
-					// Force refresh if requested
-					const forceRefresh = args?.forceRefresh === true
-
-					// Run the debugAuth function if available
-					if (client.debugAuth) {
-						const diagnostics = await client.debugAuth({ forceRefresh })
-
-						// Log full diagnostics to server logs
-						logger.info('Auth diagnostics', diagnostics)
-
-						return {
-							content: [
-								{
-									type: 'text',
-									text: `Auth Diagnostics${forceRefresh ? ' (with forced refresh)' : ''}:`,
-								},
-								{
-									type: 'text',
-									text: `Auth Manager Type: ${diagnostics.authManagerType || 'Unknown'}`,
-								},
-								{
-									type: 'text',
-									text: `Supports Refresh: ${diagnostics.supportsRefresh ? 'Yes' : 'No'}`,
-								},
-								{
-									type: 'text',
-									text: `Has Token: ${diagnostics.tokenStatus.hasAccessToken ? 'Yes' : 'No'}`,
-								},
-								{
-									type: 'text',
-									text: `Is Expired: ${diagnostics.tokenStatus.isExpired ? 'Yes' : 'No'}`,
-								},
-								{
-									type: 'text',
-									text: `Expires In: ${diagnostics.tokenStatus.expiresInSeconds} seconds`,
-								},
-								{
-									type: 'text',
-									text: `Refresh Successful: ${diagnostics.tokenStatus.refreshSuccessful ? 'Yes' : 'No/Not Attempted'}`,
-								},
-								{
-									type: 'text',
-									text: `Environment: ${diagnostics.environment?.apiEnvironment || 'Unknown'}`,
-								},
-								{
-									type: 'text',
-									text: `Auth Headers Valid: ${diagnostics.authHeadersValid ? 'Yes' : 'No'}`,
-								},
-								{
-									type: 'text',
-									text: `Full Diagnostics: ${JSON.stringify(diagnostics, null, 2)}`,
-								},
-							],
-						}
-					} else {
-						// Fall back to basic diagnostics if debugAuth isn't available
-						return {
-							content: [
-								{
-									type: 'text',
-									text: `debugAuth method not available on client. Using basic diagnostics:`,
-								},
-								{
-									type: 'text',
-									text: `Has access token: ${!!this.props.accessToken}`,
-								},
-								{
-									type: 'text',
-									text: `Has refresh token: ${!!this.props.refreshToken}`,
-								},
-								{
-									type: 'text',
-									text: `Token expiry: ${new Date(this.props.expiresAt).toISOString()}`,
-								},
-								{
-									type: 'text',
-									text: `Current time: ${new Date().toISOString()}`,
-								},
-							],
-						}
-					}
-				} catch (error) {
-					logger.error('Error in debugAuth tool', { error })
-					return {
-						content: [
-							{
-								type: 'text',
-								text: `Error running auth diagnostics: ${(error as Error).message}`,
-							},
-						],
-					}
-				}
-			},
-		)
-
 		// Register Schwab API tools
 		registerAccountTools(this.server, client)
 		registerInstrumentTools(this.server, client)
@@ -494,6 +222,18 @@ export class MyMCP extends DurableMCP<Props, Env> {
 					params: JSON.stringify(request.params),
 					id: request.id,
 				})
+
+				// Handle SSE connections and reconnections
+				if (
+					request.method === 'sse/connect' ||
+					request.method === 'sse/connect_client'
+				) {
+					logger.info('SSE connection attempt detected via RPC', {
+						method: request.method,
+						hasParams: !!request.params,
+					})
+					await this.onReconnect()
+				}
 
 				// Handle tools/list with extra logging
 				if (request.method === 'tools/list') {
@@ -641,6 +381,15 @@ export class MyMCP extends DurableMCP<Props, Env> {
 								'API tool detected, ensuring valid token before proceeding',
 								{ toolName },
 							)
+
+							// Check if connection state is valid
+							if (!this.client || !this.centralTokenManager) {
+								logger.warn(
+									'Client or token manager not initialized during API call, attempting recovery',
+								)
+								await this.onReconnect()
+							}
+
 							const tokenValid = await this.ensureValidToken()
 
 							if (!tokenValid) {
@@ -734,56 +483,95 @@ export class MyMCP extends DurableMCP<Props, Env> {
 		}
 	}
 
+	// Add a method to ensure proper initialization during reconnections
+	async onReconnect() {
+		logger.info('Handling reconnection')
+
+		try {
+			// Check if we need full reinitialization
+			if (!this.client || !this.centralTokenManager || !this.tokenManager) {
+				logger.info('Client or token manager not initialized, reinitializing')
+				await this.init()
+				return true
+			}
+
+			// Try loading token data from props
+			const tokenData = await this.loadTokenData()
+			if (tokenData) {
+				logger.info('Successfully loaded token data during reconnection')
+
+				// Update the token manager with fresh data if needed
+				if (!this.tokenManager) {
+					logger.warn('TokenManager missing, recreating during reconnection')
+
+					const redirectUri = 'https://schwab-mcp.dyeoman2.workers.dev/callback'
+					const auth = createSchwabAuth({
+						strategy: AuthStrategy.CODE_FLOW,
+						oauthConfig: {
+							clientId: this.env.SCHWAB_CLIENT_ID,
+							clientSecret: this.env.SCHWAB_CLIENT_SECRET,
+							redirectUri: redirectUri,
+							save: async (tokens) => this.saveTokenData(tokens),
+							load: async () => this.loadTokenData(),
+						},
+					})
+
+					// Store auth in tokenManager
+					this.tokenManager = auth as unknown as SchwabCodeFlowAuth
+
+					// Update central token manager
+					this.centralTokenManager = new TokenManager(this.tokenManager)
+					initializeTokenManager(this.centralTokenManager)
+				} else if (this.centralTokenManager) {
+					// If token manager exists, just ensure it has latest tokens
+					logger.info('Updating existing token manager during reconnection')
+				}
+			}
+
+			// Ensure token is still valid
+			const tokenValid = await this.ensureValidToken()
+			if (!tokenValid) {
+				logger.warn('Token invalid during reconnection')
+				return false
+			}
+
+			return true
+		} catch (error) {
+			logger.error('Error during reconnection handling', { error })
+			return false
+		}
+	}
+
 	// Replace the existing ensureValidToken method with one that uses the centralized manager
 	private async ensureValidToken(): Promise<boolean> {
 		return this.centralTokenManager.ensureValidToken()
 	}
 
-	private makeApiCall = async <T>(
-		method: (client: any) => Promise<T>,
-	): Promise<T> => {
-		try {
-			const methodName = method.name || 'unnamed function'
-			logger.info(`Making API call using ${methodName}`, {
-				clientExists: !!this.client,
-				tokenManagerExists: !!this.centralTokenManager,
-			})
+	// Add more detailed tracking of SSE connections
+	async onSSE(event: any) {
+		logger.info('SSE connection established or reconnected', {
+			source: 'onSSE',
+			hasUrl: !!event?.url,
+			urlParams: event?.url ? event.url.split('?')[1] || 'none' : 'url-missing',
+		})
 
-			// Do an explicit token check before the API call
-			if (this.centralTokenManager) {
-				const tokenValid = await this.centralTokenManager.ensureValidToken()
-				if (!tokenValid) {
-					logger.error(
-						`Token validation failed before API call to ${methodName}`,
-					)
-					throw new Error('Failed to get valid token for API request')
-				}
-
-				// Get the current token for logging
-				// Use the centralTokenManager to get token data if available
-				const tokenData = await this.centralTokenManager.getAccessToken()
-				logger.info(`Token state before API call to ${methodName}`, {
-					hasAccessToken: !!tokenData,
-					accessTokenPrefix: tokenData
-						? `${tokenData.substring(0, 10)}...`
-						: 'none',
-					// We can't easily get expiration here, so just note if we have a token
-					hasToken: !!tokenData,
-				})
+		// Attempt reconnection handling if needed
+		const isReconnect = event?.url?.includes?.('reconnect=true') || false
+		if (isReconnect) {
+			logger.info('Handling explicit SSE reconnection')
+			const reconnectSuccess = await this.onReconnect()
+			if (!reconnectSuccess) {
+				logger.warn('Reconnection failed to restore auth state')
+			} else {
+				logger.info('Reconnection successfully restored auth state')
 			}
-
-			// Use our withTokenAuth wrapper for better error logging and handling
-			return await withTokenAuth(this.client, method, this.client)
-		} catch (error) {
-			logger.error('API call failed', {
-				methodName: method.name || 'unnamed function',
-				error: error instanceof Error ? error.message : String(error),
-				errorType:
-					error instanceof Error ? error.constructor.name : typeof error,
-				stack: error instanceof Error ? error.stack : undefined,
-			})
-			throw error
+		} else {
+			// Always perform a light reconnect check even without the flag
+			logger.info('Performing routine reconnection check for SSE')
+			await this.onReconnect()
 		}
+
+		return await super.onSSE(event)
 	}
 }
 

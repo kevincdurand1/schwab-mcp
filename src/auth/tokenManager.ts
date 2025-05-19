@@ -5,28 +5,50 @@ import { type SchwabCodeFlowAuth } from './client'
 export class TokenManager {
 	private tokenClient: SchwabCodeFlowAuth
 	private tokenData: TokenData | null = null
+	private initialized = false
 
 	constructor(tokenClient: SchwabCodeFlowAuth) {
 		logger.info('TokenManager constructor called')
 		this.tokenClient = tokenClient
+		this.initialize()
+	}
+
+	private initialize() {
+		this.initialized = true
 		logger.info('TokenManager initialized with client', {
-			hasClient: !!tokenClient,
-			clientType: tokenClient ? typeof tokenClient : 'undefined',
+			hasClient: !!this.tokenClient,
+			clientType: this.tokenClient ? typeof this.tokenClient : 'undefined',
 			supportsRefresh:
-				tokenClient && typeof tokenClient.supportsRefresh === 'function'
-					? tokenClient.supportsRefresh()
+				this.tokenClient &&
+				typeof this.tokenClient.supportsRefresh === 'function'
+					? this.tokenClient.supportsRefresh()
 					: 'unknown',
 			hasGetTokenMethod:
-				tokenClient && typeof tokenClient.getTokenData === 'function'
+				this.tokenClient && typeof this.tokenClient.getTokenData === 'function'
 					? 'yes'
 					: 'no',
 			hasRefreshMethod:
-				tokenClient && typeof tokenClient.refresh === 'function' ? 'yes' : 'no',
+				this.tokenClient && typeof this.tokenClient.refresh === 'function'
+					? 'yes'
+					: 'no',
 		})
+	}
+
+	updateTokenClient(tokenClient: SchwabCodeFlowAuth) {
+		logger.info('TokenManager updating token client')
+		this.tokenClient = tokenClient
+		this.initialize()
 	}
 
 	async getAccessToken(): Promise<string | null> {
 		logger.info('TokenManager.getAccessToken called')
+		if (!this.initialized || !this.tokenClient) {
+			logger.warn(
+				'TokenManager not properly initialized when getting access token',
+			)
+			return null
+		}
+
 		const isValid = await this.ensureValidToken()
 		return isValid && this.tokenData ? this.tokenData.accessToken : null
 	}
@@ -34,6 +56,13 @@ export class TokenManager {
 	async ensureValidToken(): Promise<boolean> {
 		try {
 			logger.info('TokenManager.ensureValidToken called')
+
+			if (!this.initialized || !this.tokenClient) {
+				logger.warn(
+					'TokenManager not properly initialized when ensuring valid token',
+				)
+				return false
+			}
 
 			// Get current token data
 			this.tokenData = await this.tokenClient.getTokenData()
@@ -97,6 +126,14 @@ export class TokenManager {
 		try {
 			logger.info('[TokenManager] Starting token refresh')
 
+			// Check initialization state
+			if (!this.initialized || !this.tokenClient) {
+				logger.warn(
+					'TokenManager not properly initialized when refreshing token',
+				)
+				return false
+			}
+
 			const beforeRefresh = await this.tokenClient.getTokenData()
 			logger.info('[TokenManager] Token before refresh', {
 				hasAccessToken: !!beforeRefresh?.accessToken,
@@ -111,6 +148,12 @@ export class TokenManager {
 					? beforeRefresh.refreshToken.substring(0, 10) + '...'
 					: 'none',
 			})
+
+			// Check if refresh token is available
+			if (!beforeRefresh?.refreshToken) {
+				logger.error('[TokenManager] Refresh token is missing, cannot refresh')
+				return false
+			}
 
 			logger.info('[TokenManager] Calling refresh()...')
 			const result = await this.tokenClient.refresh()
