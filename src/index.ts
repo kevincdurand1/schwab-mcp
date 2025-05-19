@@ -550,7 +550,7 @@ export class MyMCP extends DurableMCP<Props, Env> {
 		}
 	}
 
-	// Update method to use the enhanced reconnection features
+	// Simplified reconnection method using enhanced features
 	async onReconnect() {
 		logger.info('Handling reconnection')
 
@@ -580,87 +580,9 @@ export class MyMCP extends DurableMCP<Props, Env> {
 				}
 			}
 
-			// Fall back to the original reconnection logic
-			logger.info('Falling back to original reconnection logic')
-
-			// First, always try to load token data regardless of initialization state
-			const tokenData = await this.loadTokenData()
-
-			// Log token state for debugging
-			logger.info('Token state during reconnection', {
-				hasTokenData: !!tokenData,
-				hasAccessToken: !!tokenData?.accessToken,
-				hasRefreshToken: !!tokenData?.refreshToken,
-				expiresAt: tokenData?.expiresAt
-					? new Date(tokenData.expiresAt).toISOString()
-					: 'none',
-				isExpired: tokenData?.expiresAt
-					? Date.now() > tokenData.expiresAt
-					: true,
-				hasClient: !!this.client,
-				hasTokenManager: !!this.tokenManager,
-				hasCentralTokenManager: !!this.centralTokenManager,
-			})
-
-			// Check if we need full reinitialization
-			if (!this.client || !this.centralTokenManager || !this.tokenManager) {
-				logger.info(
-					'Client or token manager not initialized, performing full reinitializing',
-				)
-				await this.init()
-
-				// After initialization, try to force token refresh if we have data
-				if (tokenData && tokenData.refreshToken) {
-					logger.info('Forcing token refresh after initialization')
-
-					// Create new token data object for refreshing
-					const refreshTokenData = {
-						accessToken: tokenData.accessToken,
-						refreshToken: tokenData.refreshToken,
-						expiresAt: 0, // Force refresh by setting to expired
-					}
-
-					// Explicitly save this token data to ensure refresh token is available
-					await this.saveTokenData(refreshTokenData)
-
-					// Attempt a token refresh
-					await this.centralTokenManager.refresh()
-				}
-
-				return true
-			}
-
-			// If components exist but token data is missing/invalid, we need to re-authenticate
-			if (!tokenData || !tokenData.refreshToken) {
-				logger.warn('Missing or invalid token data during reconnection')
-				return false
-			}
-
-			// If token is expired, try to refresh it
-			if (tokenData.expiresAt && Date.now() > tokenData.expiresAt) {
-				logger.info('Token expired during reconnection, attempting refresh')
-
-				// Update the token manager with the loaded data to ensure refresh token is available
-				await this.saveTokenData(tokenData)
-
-				// Force token refreshing
-				const refreshSuccess = await this.centralTokenManager.refresh()
-				if (!refreshSuccess) {
-					logger.warn('Token refresh failed during reconnection')
-					return false
-				}
-
-				logger.info('Token successfully refreshed during reconnection')
-			}
-
-			// Ensure token is still valid
-			const tokenValid = await this.ensureValidToken()
-			if (!tokenValid) {
-				logger.warn('Token validation failed during reconnection')
-				return false
-			}
-
-			logger.info('Reconnection successful, token is valid')
+			// If the enhanced handler isn't available, we need to initialize
+			logger.warn('Enhanced reconnection handler not available, reinitializing')
+			await this.init()
 			return true
 		} catch (error) {
 			logger.error('Error during reconnection handling', {

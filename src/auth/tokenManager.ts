@@ -212,84 +212,23 @@ export class TokenManager {
 				return result.success
 			}
 
-			// Fall back to original implementation
-			// Get current token data
-			const beforeRefresh = await this.tokenClient.getTokenData()
+			// If enhanced refresh isn't available, use standard refresh
+			logger.info(
+				'[TokenManager] Enhanced refresh not available, using standard refresh',
+			)
+			const tokenData = await this.tokenClient.getTokenData()
 
-			// Log detailed token state before refresh attempt
-			logger.info('[TokenManager] Token before refresh', {
-				hasAccessToken: !!beforeRefresh?.accessToken,
-				hasRefreshToken: !!beforeRefresh?.refreshToken,
-				refreshTokenLength: beforeRefresh?.refreshToken?.length || 0,
-				expiresAt: beforeRefresh?.expiresAt
-					? new Date(beforeRefresh.expiresAt).toISOString()
-					: 'undefined',
-				accessTokenPrefix: beforeRefresh?.accessToken
-					? beforeRefresh.accessToken.substring(0, 10) + '...'
-					: 'none',
-				refreshTokenPrefix: beforeRefresh?.refreshToken
-					? beforeRefresh.refreshToken.substring(0, 10) + '...'
-					: 'none',
-			})
-
-			// Check if refresh token is available and valid
-			if (
-				!beforeRefresh?.refreshToken ||
-				beforeRefresh.refreshToken.length < 10
-			) {
-				logger.error(
-					'[TokenManager] Refresh token is missing or invalid (length: ' +
-						(beforeRefresh?.refreshToken?.length || 0) +
-						')',
-				)
+			if (!tokenData?.refreshToken) {
+				logger.error('[TokenManager] No refresh token available')
 				return false
 			}
 
-			// Attempt refresh with explicitly provided refresh token
-			logger.info(
-				'[TokenManager] Calling refresh with explicit refresh token...',
-			)
-
-			// Call refresh with the refresh token explicitly to avoid relying on internal state
-			const result = await this.tokenClient.refresh(
-				beforeRefresh.refreshToken,
-				{ force: true },
-			)
-
-			logger.info('[TokenManager] Refresh call completed', {
-				result: result ? 'success' : 'failure',
-				resultType: typeof result,
+			const result = await this.tokenClient.refresh(tokenData.refreshToken, {
+				force: true,
 			})
+			this.tokenData = await this.tokenClient.getTokenData()
 
-			// Verify token data after refresh
-			const afterRefresh = await this.tokenClient.getTokenData()
-
-			// Log detailed token state after refresh
-			logger.info('[TokenManager] Token after refresh', {
-				hasAccessToken: !!afterRefresh?.accessToken,
-				hasRefreshToken: !!afterRefresh?.refreshToken,
-				refreshTokenLength: afterRefresh?.refreshToken?.length || 0,
-				expiresAt: afterRefresh?.expiresAt
-					? new Date(afterRefresh.expiresAt).toISOString()
-					: 'undefined',
-				accessTokenPrefix: afterRefresh?.accessToken
-					? afterRefresh.accessToken.substring(0, 10) + '...'
-					: 'none',
-				refreshTokenPrefix: afterRefresh?.refreshToken
-					? afterRefresh.refreshToken.substring(0, 10) + '...'
-					: 'none',
-				tokensChanged: beforeRefresh?.accessToken !== afterRefresh?.accessToken,
-				result: result ? 'success' : 'failure',
-			})
-
-			this.tokenData = afterRefresh
-			const success = !!afterRefresh?.accessToken
-
-			logger.info(
-				'[TokenManager] Refresh ' + (success ? 'successful' : 'failed'),
-			)
-
-			return success
+			return !!this.tokenData?.accessToken
 		} catch (error) {
 			logger.error('[TokenManager] Token refresh error', {
 				errorType:
