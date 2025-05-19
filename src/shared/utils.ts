@@ -1,6 +1,7 @@
 import { type SchwabApiClient } from '@sudowealth/schwab-api'
 import { type z } from 'zod'
 import { type TokenManager } from '../auth/tokenManager'
+import { formatError, formatSuccess } from './formatters'
 import { logger } from './logger'
 
 // Store a reference to the token manager
@@ -11,7 +12,6 @@ export function initializeTokenManager(manager: TokenManager) {
 	logger.info('Initializing token manager')
 	tokenManagerInstance = manager
 }
-
 /**
  * Ensures a valid token is available before making API requests
  *
@@ -34,16 +34,62 @@ export async function ensureValidToken(): Promise<boolean> {
 }
 
 /**
+ * Formats API results as a ToolResponse for MCP
+ */
+function toToolResponse(data: any): any {
+	// If it's already in the content array format, return it
+	if (data && data.content && Array.isArray(data.content)) {
+		return data
+	}
+
+	// For Result type objects from formatSuccess/formatError
+	if (data && 'success' in data) {
+		if (data.success) {
+			return {
+				content: [
+					{
+						type: 'text',
+						text: data.data.message || 'Operation successful',
+					},
+					{
+						type: 'json',
+						data: data.data,
+					},
+				],
+			}
+		} else {
+			return {
+				content: [
+					{
+						type: 'text',
+						text:
+							data.error instanceof Error
+								? data.error.message
+								: 'An error occurred',
+					},
+				],
+				isError: true,
+			}
+		}
+	}
+
+	// Default case - wrap in content array
+	return {
+		content: [{ type: 'json', data }],
+	}
+}
+
+/**
  * Higher-order function to create Schwab API tool handlers with consistent error handling
  *
  * This utility function handles common patterns in Schwab API tool implementations:
- * 1. Gets a fresh access token
- * 2. Invokes the API function with the validated input
- * 3. Handles errors consistently
+ * 1. Validates access token and inputs
+ * 2. Executes the handler with validated input
+ * 3. Handles errors consistently with the Result pattern
  *
  * @param client The Schwab API client
  * @param schema The Zod schema used to validate input
- * @param invoke The function that interacts with the Schwab API
+ * @param handler The function that interacts with the Schwab API and returns a Result
  * @returns A tool handler function
  */
 export function schwabTool<
@@ -56,19 +102,57 @@ export function schwabTool<
 ) {
 	// Return a function compatible with the McpServer.tool() expected callback
 	return async (args: z.infer<S>) => {
-		logger.info(`Invoking Schwab API with schema: ${schema.constructor.name}`)
-
-		// Ensure we have a valid token before proceeding
 		try {
-			if (tokenManagerInstance) {
-				await tokenManagerInstance.ensureValidToken()
-			}
-		} catch (tokenError) {
-			logger.error('Error validating token', { error: tokenError })
-		}
+			logger.info(`Invoking Schwab API with schema: ${schema.constructor.name}`)
 
-		// Invoke the API function with the validated input
-		return invoke(args)
+			// Validate token
+			const tokenValid = await ensureValidToken()
+			if (!tokenValid) {
+				return toToolResponse(
+					formatError(new Error('Authentication required'), {
+						reason: 'No valid access token',
+					}),
+				)
+			}
+
+			// Validate input
+			const validationResult = schema.safeParse(args)
+			if (!validationResult.success) {
+				return toToolResponse(
+					formatError(new Error('Invalid input'), {
+						details: validationResult.error.format(),
+					}),
+				)
+			}
+
+			// Execute the handler with validated input
+			const result = await invoke(validationResult.data)
+
+			// If result already has content array format, return directly
+			if (result && result.content && Array.isArray(result.content)) {
+				return result
+			}
+
+			// Handle success or error based on the Result type
+			if (result && 'success' in result) {
+				if (result.success) {
+					return toToolResponse(formatSuccess(result.data))
+				} else {
+					return toToolResponse(formatError(result.error))
+				}
+			}
+
+			// Default case - convert to standard format
+			return toToolResponse(result)
+		} catch (error) {
+			logger.error('Unexpected error in tool execution', { error })
+			return toToolResponse(
+				formatError(
+					error instanceof Error ? error : new Error('Unknown error'),
+					{ source: 'schwabTool' },
+				),
+			)
+		}
 	}
 }
 

@@ -112,7 +112,6 @@ export function initializeSchwabAuthClient(
 		hasSaveFunction: !!save,
 	})
 
-	// Use type assertion to bypass TypeScript restrictions for the enhanced config
 	const authConfig = {
 		strategy: AuthStrategy.ENHANCED,
 		oauthConfig: {
@@ -139,7 +138,7 @@ export function initializeSchwabAuthClient(
 				detailedErrors: true,
 			},
 		},
-	} as any // Type assertion to bypass type checking
+	}
 
 	const authClient = SchwabAuthCreatorFromLibrary(authConfig)
 	return authClient as unknown as SchwabCodeFlowAuth

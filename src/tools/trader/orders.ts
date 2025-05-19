@@ -1,42 +1,43 @@
 import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { type SchwabApiClient } from '@sudowealth/schwab-api'
 import { logger } from '../../shared/logger'
-import { schwabTool } from '../../shared/utils'
+import { createTool, toolSuccess, toolError } from '../../shared/toolBuilder'
 
-export function registerOrderTools(server: McpServer, client: SchwabApiClient) {
-	server.tool(
-		'getOrders',
-		client.schemas.GetOrdersRequestQueryParams.shape,
-		async (args) =>
-			await schwabTool(
-				client,
-				client.schemas.GetOrdersRequestQueryParams,
-				async (queryParams) => {
-					logger.info('[getOrders] Fetching orders', {
-						maxResults: queryParams.maxResults,
-						hasDateFilter:
-							!!queryParams.fromEnteredTime || !!queryParams.toEnteredTime,
-					})
+export function registerOrderTools(
+	client: SchwabApiClient,
+	server: McpServer
+) {
+	createTool(client, server, {
+		name: 'getOrders',
+		schema: client.schemas.GetOrdersRequestQueryParams,
+		handler: async (queryParams, client) => {
+			try {
+				logger.info('[getOrders] Fetching orders', {
+					maxResults: queryParams.maxResults,
+					hasDateFilter:
+						!!queryParams.fromEnteredTime || !!queryParams.toEnteredTime,
+				})
 
-					const orders = await client.trader.orders.getOrders({ queryParams })
+				const orders = await client.trader.orders.getOrders({ queryParams })
 
-					if (orders.length === 0) {
-						return {
-							content: [{ type: 'text', text: 'No Schwab orders found.' }],
-						}
-					}
+				if (orders.length === 0) {
+					return toolSuccess([], 'No Schwab orders found.')
+				}
 
-					logger.debug('[getOrders] Successfully fetched orders', {
-						count: orders.length,
-					})
+				logger.debug('[getOrders] Successfully fetched orders', {
+					count: orders.length,
+				})
 
-					return {
-						content: [
-							{ type: 'text', text: 'Successfully fetched Schwab orders:' },
-							{ type: 'text', text: JSON.stringify(orders, null, 2) },
-						],
-					}
-				},
-			)(args),
-	)
+				return toolSuccess(orders, 'Successfully fetched Schwab orders')
+			} catch (error) {
+				logger.error('[getOrders] Error fetching orders', { error })
+				return toolError(
+					error instanceof Error
+						? error
+						: new Error('Unknown error fetching orders'),
+					{ source: 'getOrders' }
+				)
+			}
+		},
+	})
 }

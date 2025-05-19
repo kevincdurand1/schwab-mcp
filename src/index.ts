@@ -10,7 +10,8 @@ import {
 } from './auth/client'
 import { TokenManager } from './auth/tokenManager'
 import { logger } from './shared/logger'
-import { initializeTokenManager } from './shared/utils'
+import { initializeTokenManager as initializeToolTokenManager } from './shared/toolBuilder'
+import { initializeTokenManager as initializeUtilTokenManager } from './shared/utils'
 import {
 	registerAccountTools,
 	registerInstrumentTools,
@@ -92,7 +93,11 @@ export class MyMCP extends DurableMCP<Props, Env> {
 
 				// Create centralized token manager and make it available to utilities
 				this.centralTokenManager = new TokenManager(this.tokenManager)
-				initializeTokenManager(this.centralTokenManager)
+
+				// Initialize both token managers with the same instance
+				logger.info('Initializing token managers')
+				initializeUtilTokenManager(this.centralTokenManager)
+				initializeToolTokenManager(this.centralTokenManager)
 
 				// Create API client with auth
 				this.client = createApiClient({
@@ -160,6 +165,12 @@ export class MyMCP extends DurableMCP<Props, Env> {
 				)
 			}
 
+			// Ensure token managers are initialized when reconnecting
+			if (this.centralTokenManager) {
+				initializeUtilTokenManager(this.centralTokenManager)
+				initializeToolTokenManager(this.centralTokenManager)
+			}
+
 			// Register all tools and track them
 			await this.registerTools(this.client)
 		} catch (error) {
@@ -169,16 +180,16 @@ export class MyMCP extends DurableMCP<Props, Env> {
 	}
 
 	private async registerTools(client: SchwabApiClient) {
-		// Register Schwab API tools
-		registerAccountTools(this.server, client)
-		registerInstrumentTools(this.server, client)
-		registerMarketHoursTools(this.server, client)
-		registerMoversTools(this.server, client)
-		registerOptionsTools(this.server, client)
-		registerOrderTools(this.server, client)
-		registerPriceHistoryTools(this.server, client)
-		registerQuotesTools(this.server, client)
-		registerTransactionTools(this.server, client)
+		// Register Schwab API tools with the new parameter order
+		registerAccountTools(client, this.server)
+		registerInstrumentTools(client, this.server)
+		registerMarketHoursTools(client, this.server)
+		registerMoversTools(client, this.server)
+		registerOptionsTools(client, this.server)
+		registerOrderTools(client, this.server)
+		registerPriceHistoryTools(client, this.server)
+		registerQuotesTools(client, this.server)
+		registerTransactionTools(client, this.server)
 	}
 
 	// Simplified reconnection method using enhanced features
@@ -186,6 +197,12 @@ export class MyMCP extends DurableMCP<Props, Env> {
 		logger.info('Handling reconnection')
 
 		try {
+			// Ensure token managers are initialized
+			if (this.centralTokenManager) {
+				initializeUtilTokenManager(this.centralTokenManager)
+				initializeToolTokenManager(this.centralTokenManager)
+			}
+
 			// Use the dedicated reconnection handler from our centralized token manager
 			if (this.centralTokenManager?.handleReconnection) {
 				const reconnectSuccess =

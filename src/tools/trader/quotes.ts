@@ -2,120 +2,106 @@ import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { type SchwabApiClient } from '@sudowealth/schwab-api'
 import { z } from 'zod'
 import { logger } from '../../shared/logger'
-import { mergeShapes, schwabTool } from '../../shared/utils'
+import { createTool, toolSuccess, toolError } from '../../shared/toolBuilder'
+import { mergeShapes } from '../../shared/utils'
 
 export function registerQuotesTools(
-	server: McpServer,
 	client: SchwabApiClient,
+	server: McpServer,
 ) {
-	server.tool(
-		'getQuotes',
-		client.schemas.GetQuotesRequestQueryParamsSchema.shape,
-		async (args) =>
-			await schwabTool(
-				client,
-				client.schemas.GetQuotesRequestQueryParamsSchema,
-				async ({ symbols, fields, indicative }) => {
-					logger.info('[getQuotes] Fetching quotes', { symbols, fields })
+	createTool(client, server, {
+		name: 'getQuotes',
+		schema: client.schemas.GetQuotesRequestQueryParamsSchema,
+		handler: async ({ symbols, fields, indicative }, client) => {
+			try {
+				logger.info('[getQuotes] Fetching quotes', { symbols, fields })
 
-					const quotesData = await client.marketData.quotes.getQuotes({
-						queryParams: { symbols, fields, indicative },
-					})
+				const quotesData = await client.marketData.quotes.getQuotes({
+					queryParams: { symbols, fields, indicative },
+				})
 
-					if (Object.keys(quotesData).length === 0) {
-						return {
-							content: [
-								{
-									type: 'text',
-									text: `No quotes found for symbols: ${symbols}.`,
-								},
-							],
-						}
-					}
+				if (Object.keys(quotesData).length === 0) {
+					return toolSuccess(
+						[],
+						`No quotes found for symbols: ${symbols}.`
+					)
+				}
 
-					logger.debug('[getQuotes] Successfully fetched quotes', {
-						symbols,
-						count: Object.keys(quotesData).length,
-					})
+				logger.debug('[getQuotes] Successfully fetched quotes', {
+					symbols,
+					count: Object.keys(quotesData).length,
+				})
 
-					return {
-						content: [
-							{
-								type: 'text',
-								text: `Successfully fetched quotes for ${symbols}:`,
-							},
-							{
-								type: 'text',
-								text: JSON.stringify(quotesData, null, 2),
-							},
-						],
-					}
-				},
-			)(args),
-	)
-
-	server.tool(
-		'getQuoteBySymbolId',
-		{
-			...client.schemas.GetQuoteBySymbolIdRequestPathParamsSchema.shape,
-			...client.schemas.GetQuoteBySymbolIdRequestQueryParamsSchema.shape,
+				return toolSuccess(
+					quotesData,
+					`Successfully fetched quotes for ${symbols}`
+				)
+			} catch (error) {
+				logger.error('[getQuotes] Error fetching quotes', {
+					error,
+					symbols,
+				})
+				return toolError(
+					error instanceof Error
+						? error
+						: new Error('Unknown error fetching quotes'),
+					{ source: 'getQuotes', symbols }
+				)
+			}
 		},
-		async (args) =>
-			await schwabTool(
-				client,
-				z.object(
-					mergeShapes(
-						client.schemas.GetQuoteBySymbolIdRequestPathParamsSchema.shape,
-						client.schemas.GetQuoteBySymbolIdRequestQueryParamsSchema.shape,
-					),
-				),
-				async ({ symbol_id, fields }) => {
-					logger.info('[getQuoteBySymbolId] Fetching quote', {
-						symbol_id,
-						fields,
-					})
+	})
 
-					const quoteData = await client.marketData.quotes.getQuoteBySymbolId({
-						pathParams: { symbol_id },
-						queryParams: { fields },
-					})
-					// The response for a single symbol is also a map { symbol: quoteDetails }
-					if (
-						!quoteData ||
-						Object.keys(quoteData).length === 0 ||
-						!quoteData[symbol_id.toUpperCase()]
-					) {
-						return {
-							content: [
-								{
-									type: 'text',
-									text: `No quote found for symbol: ${symbol_id}.`,
-								},
-							],
-						}
-					}
+	createTool(client, server, {
+		name: 'getQuoteBySymbolId',
+		schema: z.object(
+			mergeShapes(
+				client.schemas.GetQuoteBySymbolIdRequestPathParamsSchema.shape,
+				client.schemas.GetQuoteBySymbolIdRequestQueryParamsSchema.shape,
+			),
+		),
+		handler: async ({ symbol_id, fields }, client) => {
+			try {
+				logger.info('[getQuoteBySymbolId] Fetching quote', {
+					symbol_id,
+					fields,
+				})
 
-					logger.debug('[getQuoteBySymbolId] Successfully fetched quote', {
-						symbol_id,
-					})
+				const quoteData = await client.marketData.quotes.getQuoteBySymbolId({
+					pathParams: { symbol_id },
+					queryParams: { fields },
+				})
+				// The response for a single symbol is also a map { symbol: quoteDetails }
+				if (
+					!quoteData ||
+					Object.keys(quoteData).length === 0 ||
+					!quoteData[symbol_id.toUpperCase()]
+				) {
+					return toolSuccess(
+						{},
+						`No quote found for symbol: ${symbol_id}.`
+					)
+				}
 
-					return {
-						content: [
-							{
-								type: 'text',
-								text: `Successfully fetched quote for ${symbol_id}:`,
-							},
-							{
-								type: 'text',
-								text: JSON.stringify(
-									quoteData[symbol_id.toUpperCase()],
-									null,
-									2,
-								),
-							},
-						],
-					}
-				},
-			)(args),
-	)
+				logger.debug('[getQuoteBySymbolId] Successfully fetched quote', {
+					symbol_id,
+				})
+
+				return toolSuccess(
+					quoteData[symbol_id.toUpperCase()],
+					`Successfully fetched quote for ${symbol_id}`
+				)
+			} catch (error) {
+				logger.error('[getQuoteBySymbolId] Error fetching quote', {
+					error,
+					symbol_id,
+				})
+				return toolError(
+					error instanceof Error
+						? error
+						: new Error('Unknown error fetching quote'),
+					{ source: 'getQuoteBySymbolId', symbol_id }
+				)
+			}
+		},
+	})
 }

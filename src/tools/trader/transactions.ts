@@ -1,89 +1,79 @@
 import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { type SchwabApiClient } from '@sudowealth/schwab-api'
 import { logger } from '../../shared/logger'
-import { schwabTool } from '../../shared/utils'
+import { createTool, toolSuccess, toolError } from '../../shared/toolBuilder'
 
 export function registerTransactionTools(
-	server: McpServer,
 	client: SchwabApiClient,
+	server: McpServer,
 ) {
-	server.tool(
-		'getTransactions',
-		client.schemas.GetTransactionsRequestQueryParams.shape,
-		async (args) =>
-			await schwabTool(
-				client,
-				client.schemas.GetTransactionsRequestQueryParams,
-				async ({ startDate, endDate, types, symbol }) => {
-					// First get all account numbers
-					const accounts = await client.trader.accounts.getAccountNumbers()
-					if (accounts.length === 0) {
-						return {
-							content: [{ type: 'text', text: 'No Schwab accounts found.' }],
-						}
-					}
+	createTool(client, server, {
+		name: 'getTransactions',
+		schema: client.schemas.GetTransactionsRequestQueryParams,
+		handler: async ({ startDate, endDate, types, symbol }, client) => {
+			try {
+				// First get all account numbers
+				const accounts = await client.trader.accounts.getAccountNumbers()
+				if (accounts.length === 0) {
+					return toolSuccess([], 'No Schwab accounts found.')
+				}
 
-					logger.info('[getTransactions] Fetching transactions', {
-						accountCount: accounts.length,
-						startDate,
-						endDate,
-						hasTypes: !!types,
-						symbol,
-					})
+				logger.info('[getTransactions] Fetching transactions', {
+					accountCount: accounts.length,
+					startDate,
+					endDate,
+					hasTypes: !!types,
+					symbol,
+				})
 
-					const transactions: any[] = []
-					for (const account of accounts) {
-						const accountTransactions =
-							await client.trader.transactions.getTransactions({
-								pathParams: { accountNumber: account.hashValue },
-								queryParams: {
-									startDate,
-									endDate,
-									types,
-									symbol,
-								},
-							})
-						logger.debug('[getTransactions] Transactions for account', {
-							accountHash: account.hashValue,
-							count: accountTransactions.length,
+				const transactions: any[] = []
+				for (const account of accounts) {
+					const accountTransactions =
+						await client.trader.transactions.getTransactions({
+							pathParams: { accountNumber: account.hashValue },
+							queryParams: {
+								startDate,
+								endDate,
+								types,
+								symbol,
+							},
 						})
-						transactions.push(...accountTransactions)
-					}
+					logger.debug('[getTransactions] Transactions for account', {
+						accountHash: account.hashValue,
+						count: accountTransactions.length,
+					})
+					transactions.push(...accountTransactions)
+				}
 
-					if (transactions.length === 0) {
-						return {
-							content: [
-								{ type: 'text', text: 'No Schwab transactions found.' },
-							],
-						}
-					}
+				if (transactions.length === 0) {
+					return toolSuccess([], 'No Schwab transactions found.')
+				}
 
-					// Format the output
-					const transactionSummaries = transactions.map((trans: any) => ({
-						...trans,
-					}))
+				// Format the output
+				const transactionSummaries = transactions.map((trans: any) => ({
+					...trans,
+				}))
 
-					logger.debug(
-						'[getTransactions] Successfully fetched all transactions',
-						{
-							totalCount: transactions.length,
-						},
-					)
+				logger.debug(
+					'[getTransactions] Successfully fetched all transactions',
+					{
+						totalCount: transactions.length,
+					},
+				)
 
-					return {
-						content: [
-							{
-								type: 'text',
-								text: 'Successfully fetched Schwab transactions:',
-							},
-							// Stringify JSON data and return as text, based on SDK examples
-							{
-								type: 'text',
-								text: JSON.stringify(transactionSummaries, null, 2),
-							},
-						],
-					}
-				},
-			)(args),
-	)
+				return toolSuccess(
+					transactionSummaries,
+					'Successfully fetched Schwab transactions'
+				)
+			} catch (error) {
+				logger.error('[getTransactions] Error fetching transactions', { error })
+				return toolError(
+					error instanceof Error
+						? error
+						: new Error('Unknown error fetching transactions'),
+					{ source: 'getTransactions' }
+				)
+			}
+		},
+	})
 }
