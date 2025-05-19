@@ -19,52 +19,54 @@ export function registerAccountTools(
 	server.tool(
 		'getAccounts',
 		{ showPositions: z.boolean().default(false) },
-		schwabTool(client, GetAccountsSchema, async ({ showPositions }) => {
-			logger.info('Fetching accounts', { showPositions })
-			const accounts = await client.trader.accounts.getAccounts({
-				queryParams: { fields: showPositions ? 'positions' : undefined },
-			})
+		async (args) =>
+			await schwabTool(client, GetAccountsSchema, async ({ showPositions }) => {
+				logger.info('Fetching accounts', { showPositions })
+				const accounts = await client.trader.accounts.getAccounts({
+					queryParams: { fields: showPositions ? 'positions' : undefined },
+				})
 
-			if (accounts.length === 0) {
-				return {
-					content: [{ type: 'text', text: 'No Schwab accounts found.' }],
+				if (accounts.length === 0) {
+					return {
+						content: [{ type: 'text', text: 'No Schwab accounts found.' }],
+					}
 				}
-			}
-			const accountSummaries = accounts.map((acc: any) => ({
-				...acc.securitiesAccount,
-			}))
-			logger.debug('Successfully fetched accounts', {
-				count: accounts.length,
-			})
-			return {
-				content: [
-					{ type: 'text', text: 'Successfully fetched Schwab accounts:' },
-					{ type: 'text', text: JSON.stringify(accountSummaries, null, 2) },
-				],
-			}
-		}),
+				const accountSummaries = accounts.map((acc: any) => ({
+					...acc.securitiesAccount,
+				}))
+				logger.debug('Successfully fetched accounts', {
+					count: accounts.length,
+				})
+				return {
+					content: [
+						{ type: 'text', text: 'Successfully fetched Schwab accounts:' },
+						{ type: 'text', text: JSON.stringify(accountSummaries, null, 2) },
+					],
+				}
+			})(args),
 	)
 
 	server.tool(
 		'getAccountNumbers',
 		{},
-		schwabTool(client, GetAccountNumbersSchema, async () => {
-			logger.info('Fetching account numbers')
-			const accounts = await client.trader.accounts.getAccountNumbers()
-			if (accounts.length === 0) {
-				return {
-					content: [{ type: 'text', text: 'No Schwab accounts found.' }],
+		async (args) =>
+			await schwabTool(client, GetAccountNumbersSchema, async () => {
+				logger.info('Fetching account numbers')
+				const accounts = await client.trader.accounts.getAccountNumbers()
+				if (accounts.length === 0) {
+					return {
+						content: [{ type: 'text', text: 'No Schwab accounts found.' }],
+					}
 				}
-			}
-			logger.debug('Successfully fetched account numbers', {
-				count: accounts.length,
-			})
-			return {
-				content: [
-					{ type: 'text', text: 'Successfully fetched Schwab accounts:' },
-					{ type: 'text', text: JSON.stringify(accounts, null, 2) },
-				],
-			}
-		}),
+				logger.debug('Successfully fetched account numbers', {
+					count: accounts.length,
+				})
+				return {
+					content: [
+						{ type: 'text', text: 'Successfully fetched Schwab accounts:' },
+						{ type: 'text', text: JSON.stringify(accounts, null, 2) },
+					],
+				}
+			})(args),
 	)
 }

@@ -14,55 +14,56 @@ export function registerMoversTools(
 			client.schemas.GetMoversRequestQueryParamsSchema.shape,
 			client.schemas.GetMoversRequestPathParamsSchema.shape,
 		),
-		schwabTool(
-			client,
-			z.object(
-				mergeShapes(
-					client.schemas.GetMoversRequestQueryParamsSchema.shape,
-					client.schemas.GetMoversRequestPathParamsSchema.shape,
+		async (args) =>
+			await schwabTool(
+				client,
+				z.object(
+					mergeShapes(
+						client.schemas.GetMoversRequestQueryParamsSchema.shape,
+						client.schemas.GetMoversRequestPathParamsSchema.shape,
+					),
 				),
-			),
-			async ({ symbol_id, sort, frequency }) => {
-				logger.info('[getMovers] Fetching movers', {
-					symbol_id,
-					sort,
-					frequency,
-				})
+				async ({ symbol_id, sort, frequency }) => {
+					logger.info('[getMovers] Fetching movers', {
+						symbol_id,
+						sort,
+						frequency,
+					})
 
-				const movers = await client.marketData.movers.getMovers({
-					pathParams: { symbol_id },
-					queryParams: { sort, frequency },
-				})
+					const movers = await client.marketData.movers.getMovers({
+						pathParams: { symbol_id },
+						queryParams: { sort, frequency },
+					})
 
-				if (!movers || !movers.screeners || movers.screeners.length === 0) {
+					if (!movers || !movers.screeners || movers.screeners.length === 0) {
+						return {
+							content: [
+								{
+									type: 'text',
+									text: `No movers found for symbol: ${symbol_id}.`,
+								},
+							],
+						}
+					}
+
+					logger.debug('[getMovers] Successfully fetched movers', {
+						symbol: symbol_id,
+						count: movers.screeners.length,
+					})
+
 					return {
 						content: [
 							{
 								type: 'text',
-								text: `No movers found for symbol: ${symbol_id}.`,
+								text: `Successfully fetched movers for ${symbol_id}:`,
+							},
+							{
+								type: 'text',
+								text: JSON.stringify(movers.screeners, null, 2),
 							},
 						],
 					}
-				}
-
-				logger.debug('[getMovers] Successfully fetched movers', {
-					symbol: symbol_id,
-					count: movers.screeners.length,
-				})
-
-				return {
-					content: [
-						{
-							type: 'text',
-							text: `Successfully fetched movers for ${symbol_id}:`,
-						},
-						{
-							type: 'text',
-							text: JSON.stringify(movers.screeners, null, 2),
-						},
-					],
-				}
-			},
-		),
+				},
+			)(args),
 	)
 }

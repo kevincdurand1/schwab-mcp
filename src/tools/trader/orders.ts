@@ -7,35 +7,36 @@ export function registerOrderTools(server: McpServer, client: SchwabApiClient) {
 	server.tool(
 		'getOrders',
 		client.schemas.GetOrdersRequestQueryParams.shape,
-		schwabTool(
-			client,
-			client.schemas.GetOrdersRequestQueryParams,
-			async (queryParams) => {
-				logger.info('[getOrders] Fetching orders', {
-					maxResults: queryParams.maxResults,
-					hasDateFilter:
-						!!queryParams.fromEnteredTime || !!queryParams.toEnteredTime,
-				})
+		async (args) =>
+			await schwabTool(
+				client,
+				client.schemas.GetOrdersRequestQueryParams,
+				async (queryParams) => {
+					logger.info('[getOrders] Fetching orders', {
+						maxResults: queryParams.maxResults,
+						hasDateFilter:
+							!!queryParams.fromEnteredTime || !!queryParams.toEnteredTime,
+					})
 
-				const orders = await client.trader.orders.getOrders({queryParams})
+					const orders = await client.trader.orders.getOrders({ queryParams })
 
-				if (orders.length === 0) {
-					return {
-						content: [{ type: 'text', text: 'No Schwab orders found.' }],
+					if (orders.length === 0) {
+						return {
+							content: [{ type: 'text', text: 'No Schwab orders found.' }],
+						}
 					}
-				}
 
-				logger.debug('[getOrders] Successfully fetched orders', {
-					count: orders.length,
-				})
+					logger.debug('[getOrders] Successfully fetched orders', {
+						count: orders.length,
+					})
 
-				return {
-					content: [
-						{ type: 'text', text: 'Successfully fetched Schwab orders:' },
-						{ type: 'text', text: JSON.stringify(orders, null, 2) },
-					],
-				}
-			},
-		),
+					return {
+						content: [
+							{ type: 'text', text: 'Successfully fetched Schwab orders:' },
+							{ type: 'text', text: JSON.stringify(orders, null, 2) },
+						],
+					}
+				},
+			)(args),
 	)
 }

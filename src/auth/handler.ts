@@ -6,7 +6,11 @@ import { createApiClient } from '@sudowealth/schwab-api'
 import { Hono } from 'hono'
 import { logger } from '../shared/logger'
 import { type Env } from '../types/env'
-import { initializeSchwabAuthClient, redirectToSchwab, type CodeFlowTokenData } from './client'
+import {
+	initializeSchwabAuthClient,
+	redirectToSchwab,
+	type CodeFlowTokenData,
+} from './client'
 import {
 	clientIdAlreadyApproved,
 	parseRedirectApproval,
@@ -90,35 +94,32 @@ app.get('/callback', async (c) => {
 
 	// Use our SchwabAuth service with token persistence
 	const redirectUri = new URL('/callback', c.req.raw.url).href
-	
+
 	// Define token storage functions for KV
 	const saveToken = async (tokenData: CodeFlowTokenData) => {
-		const userId = oauthReqInfo.clientId;
-		if (!userId) return;
-		await c.env.OAUTH_KV?.put(
-			`token:${userId}`, 
-			JSON.stringify(tokenData)
-		);
-	};
-	
+		const userId = oauthReqInfo.clientId
+		if (!userId) return
+		await c.env.OAUTH_KV?.put(`token:${userId}`, JSON.stringify(tokenData))
+	}
+
 	const loadToken = async (): Promise<CodeFlowTokenData | null> => {
-		const userId = oauthReqInfo.clientId;
-		if (!userId) return null;
-		const tokenStr = await c.env.OAUTH_KV?.get(`token:${userId}`);
-		return tokenStr ? JSON.parse(tokenStr) as CodeFlowTokenData : null;
-	};
-	
+		const userId = oauthReqInfo.clientId
+		if (!userId) return null
+		const tokenStr = await c.env.OAUTH_KV?.get(`token:${userId}`)
+		return tokenStr ? (JSON.parse(tokenStr) as CodeFlowTokenData) : null
+	}
+
 	const auth = initializeSchwabAuthClient(
-		c.env, 
+		c.env,
 		redirectUri,
 		loadToken,
-		saveToken
-	);
+		saveToken,
+	)
 
 	try {
 		// Exchange the code for tokens
 		const tokenSet = await auth.exchangeCode(code as string)
-		
+
 		// Create the API client with the authenticated auth client
 		const client = createApiClient({
 			config: { environment: 'PRODUCTION' },
