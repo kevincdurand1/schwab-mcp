@@ -85,7 +85,8 @@ export class TokenManager {
 				return false
 			}
 
-			// If validateToken isn't available, get token data
+			// If enhanced validation is unavailable, use the getTokenData + expiry check method
+			// This should only happen if the library is outdated
 			this.tokenData = await this.tokenClient.getTokenData()
 
 			if (!this.tokenData?.accessToken) {
@@ -93,19 +94,14 @@ export class TokenManager {
 				return false
 			}
 
-			// Check if token is expired or expiring soon
-			const now = Date.now()
-			const bufferTime = 300 * 1000 // 5 minutes
-
+			// Check expiration
 			if (
 				this.tokenData.expiresAt &&
-				now + bufferTime >= this.tokenData.expiresAt
+				Date.now() + 300000 >= this.tokenData.expiresAt
 			) {
-				logger.info('Token expired or expiring soon, attempting refresh')
 				return await this.refresh()
 			}
 
-			logger.info('Token is valid, no refresh needed')
 			return true
 		} catch (error) {
 			logger.error('Error validating token', { error })
@@ -117,7 +113,6 @@ export class TokenManager {
 		try {
 			logger.info('Starting token refresh')
 
-			// Check initialization state
 			if (!this.initialized || !this.tokenClient) {
 				logger.warn('TokenManager not properly initialized')
 				return false
@@ -136,21 +131,14 @@ export class TokenManager {
 				return result.success
 			}
 
-			// If enhanced refresh isn't available, use standard refresh
-			logger.info('Using standard refresh')
+			// Fall back to standard refresh if enhanced isn't available
 			const tokenData = await this.tokenClient.getTokenData()
-
 			if (!tokenData?.refreshToken) {
-				logger.error('No refresh token available')
 				return false
 			}
 
-			// Call refresh without storing the unused result
-			await this.tokenClient.refresh(tokenData.refreshToken, {
-				force: true,
-			})
+			await this.tokenClient.refresh(tokenData.refreshToken, { force: true })
 			this.tokenData = await this.tokenClient.getTokenData()
-
 			return !!this.tokenData?.accessToken
 		} catch (error) {
 			logger.error('Token refresh error', { error })
@@ -173,14 +161,12 @@ export class TokenManager {
 		try {
 			// Use enhanced reconnection handler
 			if (this.tokenClient.handleReconnection) {
-				logger.info('Using enhanced reconnection handler')
-
 				const result = await this.tokenClient.handleReconnection({
 					forceTokenRefresh: true,
 					validateTokens: true,
 				})
 
-				// Update our token data
+				// Update our token data if successful
 				if (result.success) {
 					this.tokenData = await this.tokenClient.getTokenData()
 				}
@@ -188,8 +174,7 @@ export class TokenManager {
 				return result.success
 			}
 
-			// Fall back to manual refresh
-			logger.info('Falling back to manual refresh')
+			// Fall back to refresh if enhanced reconnection isn't available
 			return await this.refresh()
 		} catch (error) {
 			logger.error('Reconnection error', { error })

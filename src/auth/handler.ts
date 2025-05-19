@@ -23,10 +23,7 @@ app.get('/authorize', async (c) => {
 	const oauthReqInfo = await c.env.OAUTH_PROVIDER.parseAuthRequest(c.req.raw)
 	const { clientId } = oauthReqInfo
 	if (!clientId) {
-		logger.error('Invalid request: clientId is missing', {
-			path: '/authorize',
-			method: 'GET',
-		})
+		logger.error('Invalid request: clientId is missing')
 		return c.text('Invalid request', 400)
 	}
 
@@ -57,10 +54,7 @@ app.post('/authorize', async (c) => {
 		c.env.COOKIE_ENCRYPTION_KEY,
 	)
 	if (!state.oauthReqInfo) {
-		logger.error('Invalid request: state.oauthReqInfo is missing', {
-			path: '/authorize',
-			method: 'POST',
-		})
+		logger.error('Invalid request: state.oauthReqInfo is missing')
 		return c.text('Invalid request', 400)
 	}
 
@@ -71,110 +65,92 @@ app.post('/authorize', async (c) => {
  * OAuth Callback Endpoint
  *
  * This route handles the callback from Schwab after user authentication.
- * It exchanges the temporary code for an access token, then stores some
- * user metadata & the auth token as part of the 'props' on the token passed
- * down to the client. It ends by redirecting the client back to _its_ callback URL
+ * It exchanges the temporary code for an access token and completes the
+ * authorization flow.
  */
 app.get('/callback', async (c) => {
-	// Get the oathReqInfo out of state
-	const oauthReqInfo = JSON.parse(
-		atob(c.req.query('state') as string),
-	) as AuthRequest
+	// Extract state and code from query parameters
+	const stateParam = c.req.query('state')
+	const code = c.req.query('code')
+
+	if (!stateParam || !code) {
+		logger.error('Missing required parameters', {
+			hasState: !!stateParam,
+			hasCode: !!code,
+		})
+		return c.text('Missing required parameters', 400)
+	}
+
+	// Parse the state to get the oauthReqInfo
+	const oauthReqInfo = JSON.parse(atob(stateParam)) as AuthRequest
 	if (!oauthReqInfo.clientId) {
-		logger.error('Invalid state: clientId is missing', { path: '/callback' })
+		logger.error('Invalid state: clientId is missing')
 		return c.text('Invalid state', 400)
 	}
 
-	// Exchange the code for an access token using the auth client
-	const code = c.req.query('code')
-	if (!code) {
-		logger.error('Missing code parameter', { path: '/callback' })
-		return c.text('Missing code', 400)
-	}
-
-	// Use our SchwabAuth service with token persistence
+	// Set up redirect URI and token storage for KV
 	const redirectUri = new URL('/callback', c.req.raw.url).href
+	const userId = oauthReqInfo.clientId
 
-	// Define token storage functions for KV
 	const saveToken = async (tokenData: CodeFlowTokenData) => {
-		const userId = oauthReqInfo.clientId
-		if (!userId) return
 		await c.env.OAUTH_KV?.put(`token:${userId}`, JSON.stringify(tokenData))
 	}
 
 	const loadToken = async (): Promise<CodeFlowTokenData | null> => {
-		const userId = oauthReqInfo.clientId
-		if (!userId) return null
 		const tokenStr = await c.env.OAUTH_KV?.get(`token:${userId}`)
 		return tokenStr ? (JSON.parse(tokenStr) as CodeFlowTokenData) : null
 	}
 
-	const auth = initializeSchwabAuthClient(
-		c.env,
-		redirectUri,
-		loadToken,
-		saveToken,
-	)
-
 	try {
-		// Exchange the code for tokens
-		const tokenSet = await auth.exchangeCode(code as string)
+		// Initialize auth client with persistence
+		const auth = initializeSchwabAuthClient(
+			c.env,
+			redirectUri,
+			loadToken,
+			saveToken,
+		)
 
-		// Create the API client with the authenticated auth client
+		// Exchange the code for tokens
+		const tokenSet = await auth.exchangeCode(code)
+
+		// Create API client
 		const client = createApiClient({
 			config: { environment: 'PRODUCTION' },
 			auth,
 		})
 
-		// Fetch the user info from Schwab
-		try {
-			const userPreferences =
-				await client.trader.userPreference.getUserPreference()
+		// Fetch user info to get the Schwab user ID
+		const userPreferences =
+			await client.trader.userPreference.getUserPreference()
+		const userIdFromSchwab =
+			userPreferences?.streamerInfo?.[0]?.schwabClientCorrelId
 
-			const userIdFromSchwab =
-				userPreferences?.streamerInfo?.[0]?.schwabClientCorrelId
-			if (!userIdFromSchwab) {
-				logger.error('No user ID found in UserPreference', {
-					path: '/callback',
-				})
-				return c.text('No user ID found in UserPreference', 500)
-			}
-
-			// Return back to the MCP client a new token
-			const { redirectTo } = await c.env.OAUTH_PROVIDER.completeAuthorization({
-				request: oauthReqInfo,
-				userId: userIdFromSchwab,
-				metadata: { label: userIdFromSchwab },
-				scope: oauthReqInfo.scope,
-				props: {
-					userId: userIdFromSchwab,
-					accessToken: tokenSet.accessToken,
-					refreshToken: tokenSet.refreshToken,
-					expiresAt: tokenSet.expiresAt,
-				},
-			})
-
-			return Response.redirect(redirectTo)
-		} catch (error) {
-			logger.error('Failed to fetch user preferences', {
-				path: '/callback',
-				error,
-			})
-			return c.text(
-				`Failed to fetch user preferences: ${error instanceof Error ? error.message : String(error)}`,
-				500,
-			)
+		if (!userIdFromSchwab) {
+			logger.error('No user ID found in UserPreference')
+			return c.text('Failed to retrieve user information', 500)
 		}
-	} catch (error: any) {
-		logger.error('Token exchange failed', {
-			path: '/callback',
-			errorMessage: error instanceof Error ? error.message : String(error),
-			errorName: error instanceof Error ? error.name : 'Unknown',
-			errorCode: error?.code || 'no_code',
-			errorStack: error instanceof Error ? error.stack : undefined,
-			errorDetails: JSON.stringify(error),
+
+		// Complete the authorization flow
+		const { redirectTo } = await c.env.OAUTH_PROVIDER.completeAuthorization({
+			request: oauthReqInfo,
+			userId: userIdFromSchwab,
+			metadata: { label: userIdFromSchwab },
+			scope: oauthReqInfo.scope,
+			props: {
+				userId: userIdFromSchwab,
+				accessToken: tokenSet.accessToken,
+				refreshToken: tokenSet.refreshToken,
+				expiresAt: tokenSet.expiresAt,
+			},
 		})
-		return c.text('Failed to exchange authorization code for token.', 500)
+
+		return Response.redirect(redirectTo)
+	} catch (error) {
+		logger.error('Authorization failed', {
+			error,
+			errorMessage: error instanceof Error ? error.message : String(error),
+		})
+		return c.text('Authorization failed', 500)
 	}
 })
 
