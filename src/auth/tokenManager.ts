@@ -2,15 +2,46 @@ import { type TokenData } from '@sudowealth/schwab-api'
 import { logger } from '../shared/logger'
 import { type SchwabCodeFlowAuth } from './client'
 
+// Add these types to match the enhanced token management features
+interface TokenLifecycleEvent {
+	type: 'save' | 'load' | 'refresh' | 'expire' | 'error'
+	tokenData?: TokenData | null
+	error?: Error | null
+	timestamp: number
+}
+
 export class TokenManager {
 	private tokenClient: SchwabCodeFlowAuth
 	private tokenData: TokenData | null = null
 	private initialized = false
+	// Track token lifecycle events
+	private tokenEvents: TokenLifecycleEvent[] = []
+	// Store the last reconnection attempt time
+	private lastReconnectTime = 0
 
 	constructor(tokenClient: SchwabCodeFlowAuth) {
 		logger.info('TokenManager constructor called')
 		this.tokenClient = tokenClient
 		this.initialize()
+
+		// Subscribe to token events if available
+		if (this.tokenClient.onTokenEvent) {
+			this.tokenClient.onTokenEvent((event) => {
+				logger.info(`[TokenManager] Token event: ${event.type}`, {
+					hasTokenData: !!event.tokenData,
+					hasError: !!event.error,
+					timestamp: event.timestamp,
+				})
+
+				// Store the event
+				this.tokenEvents.push(event)
+
+				// If this is a refresh event, update our local token data
+				if (event.type === 'refresh' && event.tokenData) {
+					this.tokenData = event.tokenData
+				}
+			})
+		}
 	}
 
 	private initialize() {
@@ -31,6 +62,10 @@ export class TokenManager {
 				this.tokenClient && typeof this.tokenClient.refresh === 'function'
 					? 'yes'
 					: 'no',
+			// Check for new enhanced features
+			hasTokenEvents: !!this.tokenClient.onTokenEvent,
+			hasReconnect: !!this.tokenClient.handleReconnection,
+			hasForceRefresh: !!this.tokenClient.forceRefresh,
 		})
 	}
 
@@ -64,7 +99,26 @@ export class TokenManager {
 				return false
 			}
 
-			// Get current token data
+			// Use enhanced token validation if available
+			if (this.tokenClient.validateToken) {
+				const validationResult = await this.tokenClient.validateToken()
+
+				if (validationResult.valid) {
+					this.tokenData = validationResult.tokenData ?? null
+					logger.info('Token is valid (using enhanced validation)')
+					return true
+				}
+
+				if (validationResult.canRefresh) {
+					// Use the enhanced refresh capability
+					return await this.refresh()
+				}
+
+				logger.error('Token invalid and cannot be refreshed', validationResult)
+				return false
+			}
+
+			// Fall back to original validation logic
 			this.tokenData = await this.tokenClient.getTokenData()
 
 			logger.info('Retrieved token data', {
@@ -134,6 +188,31 @@ export class TokenManager {
 				return false
 			}
 
+			// Use enhanced forceRefresh if available
+			if (this.tokenClient.forceRefresh) {
+				logger.info('[TokenManager] Using enhanced force refresh')
+				const result = await this.tokenClient.forceRefresh({
+					retryOnFailure: true,
+					logDetails: true,
+				})
+
+				// Get updated token data after refresh
+				this.tokenData = await this.tokenClient.getTokenData()
+
+				logger.info('[TokenManager] Enhanced refresh completed', {
+					success: result.success,
+					hasAccessToken: !!this.tokenData?.accessToken,
+					hasRefreshToken: !!this.tokenData?.refreshToken,
+					expiresIn: this.tokenData?.expiresAt
+						? Math.floor((this.tokenData.expiresAt - Date.now()) / 1000) +
+							' seconds'
+						: 'unknown',
+				})
+
+				return result.success
+			}
+
+			// Fall back to original implementation
 			// Get current token data
 			const beforeRefresh = await this.tokenClient.getTokenData()
 
@@ -219,6 +298,84 @@ export class TokenManager {
 				stack: error instanceof Error ? error.stack : undefined,
 			})
 			return false
+		}
+	}
+
+	// Add a dedicated method for handling reconnection
+	async handleReconnection(): Promise<boolean> {
+		// Avoid reconnecting too frequently
+		const now = Date.now()
+		if (now - this.lastReconnectTime < 5000) {
+			// 5 seconds minimum between reconnects
+			logger.info(
+				'[TokenManager] Skipping reconnection, too soon after last attempt',
+			)
+			return false
+		}
+
+		this.lastReconnectTime = now
+		logger.info('[TokenManager] Handling reconnection explicitly')
+
+		try {
+			// Use enhanced reconnection handler if available
+			if (this.tokenClient.handleReconnection) {
+				logger.info('[TokenManager] Using enhanced reconnection handler')
+
+				const result = await this.tokenClient.handleReconnection({
+					forceTokenRefresh: true,
+					validateTokens: true,
+				})
+
+				logger.info('[TokenManager] Enhanced reconnection completed', {
+					success: result.success,
+					tokenRestored: result.tokenRestored,
+					refreshPerformed: result.refreshPerformed,
+				})
+
+				// Update our token data
+				if (result.success) {
+					this.tokenData = await this.tokenClient.getTokenData()
+				}
+
+				return result.success
+			}
+
+			// Fall back to manual reconnection
+			logger.info('[TokenManager] Falling back to manual reconnection')
+			return await this.refresh()
+		} catch (error) {
+			logger.error('[TokenManager] Reconnection error', {
+				errorType:
+					error instanceof Error ? error.constructor.name : typeof error,
+				message: error instanceof Error ? error.message : String(error),
+				stack: error instanceof Error ? error.stack : undefined,
+			})
+			return false
+		}
+	}
+
+	// Add a method to get token health diagnostics
+	getTokenDiagnostics() {
+		return {
+			initialized: this.initialized,
+			hasTokenData: !!this.tokenData,
+			hasAccessToken: !!this.tokenData?.accessToken,
+			hasRefreshToken: !!this.tokenData?.refreshToken,
+			isExpired: this.tokenData?.expiresAt
+				? Date.now() > this.tokenData.expiresAt
+				: true,
+			expiresIn: this.tokenData?.expiresAt
+				? Math.floor((this.tokenData.expiresAt - Date.now()) / 1000)
+				: -1,
+			eventsCount: this.tokenEvents.length,
+			lastEventType:
+				this.tokenEvents.length > 0
+					? this.tokenEvents[this.tokenEvents.length - 1]?.type
+					: 'none',
+			lastReconnection:
+				this.lastReconnectTime > 0
+					? new Date(this.lastReconnectTime).toISOString()
+					: 'never',
 		}
 	}
 }

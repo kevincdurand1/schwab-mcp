@@ -149,16 +149,40 @@ export class MyMCP extends DurableMCP<Props, Env> {
 				// Create fresh auth components
 				logger.info('Creating auth components')
 
-				const auth = createSchwabAuth({
-					strategy: AuthStrategy.CODE_FLOW,
+				// Define the complete config with the enhanced options
+				const authConfig = {
+					// Use the new enhanced strategy instead of CODE_FLOW
+					strategy: AuthStrategy.ENHANCED,
 					oauthConfig: {
 						clientId: this.env.SCHWAB_CLIENT_ID,
 						clientSecret: this.env.SCHWAB_CLIENT_SECRET,
 						redirectUri: redirectUri,
-						save: async (tokens) => this.saveTokenData(tokens),
+						save: async (tokens: CodeFlowTokenData) =>
+							this.saveTokenData(tokens),
 						load: async () => this.loadTokenData(),
 					},
-				})
+					// Add configuration for the enhanced token manager
+					enhancedConfig: {
+						persistence: {
+							validateOnLoad: true,
+							validateOnSave: true,
+							events: true,
+						},
+						reconnection: {
+							enabled: true,
+							retryOnTransientErrors: true,
+							maxRetries: 3,
+							backoffFactor: 1.5,
+						},
+						diagnostics: {
+							logTokenState: true,
+							detailedErrors: true,
+						},
+					},
+				}
+
+				// Use type assertion to bypass TypeScript restrictions
+				const auth = createSchwabAuth(authConfig as any)
 
 				// Store auth in tokenManager
 				this.tokenManager = auth as unknown as SchwabCodeFlowAuth
@@ -526,11 +550,39 @@ export class MyMCP extends DurableMCP<Props, Env> {
 		}
 	}
 
-	// Add a method to ensure proper initialization during reconnections
+	// Update method to use the enhanced reconnection features
 	async onReconnect() {
 		logger.info('Handling reconnection')
 
 		try {
+			// Use the dedicated reconnection handler from our centralized token manager
+			if (
+				this.centralTokenManager &&
+				this.centralTokenManager.handleReconnection
+			) {
+				logger.info('Using enhanced reconnection handler')
+				const reconnectSuccess =
+					await this.centralTokenManager.handleReconnection()
+
+				if (reconnectSuccess) {
+					logger.info('Enhanced reconnection successful')
+
+					// Log token diagnostics
+					if (this.centralTokenManager.getTokenDiagnostics) {
+						const diagnostics = this.centralTokenManager.getTokenDiagnostics()
+						logger.info('Token diagnostics after reconnection', diagnostics)
+					}
+
+					return true
+				} else {
+					logger.warn('Enhanced reconnection failed')
+					return false
+				}
+			}
+
+			// Fall back to the original reconnection logic
+			logger.info('Falling back to original reconnection logic')
+
 			// First, always try to load token data regardless of initialization state
 			const tokenData = await this.loadTokenData()
 

@@ -20,6 +20,34 @@ export interface CodeFlowTokenData extends TokenData {
 	expiresAt: number
 }
 
+// Define interfaces for the enhanced token management features
+export interface TokenLifecycleEvent {
+	type: 'save' | 'load' | 'refresh' | 'expire' | 'error'
+	tokenData?: TokenData | null
+	error?: Error | null
+	timestamp: number
+}
+
+export interface TokenValidationResult {
+	valid: boolean
+	canRefresh: boolean
+	tokenData?: TokenData | null
+	reason?: string
+}
+
+export interface TokenRefreshResult {
+	success: boolean
+	tokenData?: TokenData | null
+	error?: Error | null
+}
+
+export interface ReconnectionResult {
+	success: boolean
+	tokenRestored: boolean
+	refreshPerformed: boolean
+	error?: Error | null
+}
+
 // Define the interface for the auth client returned by createSchwabAuth for CODE_FLOW
 export interface SchwabCodeFlowAuth {
 	getAuthorizationUrl(options?: any): {
@@ -47,6 +75,19 @@ export interface SchwabCodeFlowAuth {
 		options?: { force?: boolean },
 	) => Promise<any>
 	supportsRefresh: () => boolean
+
+	// Enhanced token management features
+	onTokenEvent?: (callback: (event: TokenLifecycleEvent) => void) => void
+	validateToken?: () => Promise<TokenValidationResult>
+	forceRefresh?: (options?: {
+		retryOnFailure?: boolean
+		logDetails?: boolean
+	}) => Promise<TokenRefreshResult>
+	handleReconnection?: (options?: {
+		forceTokenRefresh?: boolean
+		validateTokens?: boolean
+	}) => Promise<ReconnectionResult>
+	getTokenDiagnostics?: () => any
 }
 
 /**
