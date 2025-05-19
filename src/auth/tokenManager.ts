@@ -2,7 +2,7 @@ import { type TokenData } from '@sudowealth/schwab-api'
 import { logger } from '../shared/logger'
 import { type SchwabCodeFlowAuth } from './client'
 
-// Add these types to match the enhanced token management features
+// Token lifecycle event interface
 interface TokenLifecycleEvent {
 	type: 'save' | 'load' | 'refresh' | 'expire' | 'error'
 	tokenData?: TokenData | null
@@ -20,18 +20,14 @@ export class TokenManager {
 	private lastReconnectTime = 0
 
 	constructor(tokenClient: SchwabCodeFlowAuth) {
-		logger.info('TokenManager constructor called')
+		logger.info('TokenManager initialized')
 		this.tokenClient = tokenClient
-		this.initialize()
+		this.initialized = true
 
 		// Subscribe to token events if available
 		if (this.tokenClient.onTokenEvent) {
 			this.tokenClient.onTokenEvent((event) => {
-				logger.info(`[TokenManager] Token event: ${event.type}`, {
-					hasTokenData: !!event.tokenData,
-					hasError: !!event.error,
-					timestamp: event.timestamp,
-				})
+				logger.info(`Token event: ${event.type}`)
 
 				// Store the event
 				this.tokenEvents.push(event)
@@ -44,43 +40,16 @@ export class TokenManager {
 		}
 	}
 
-	private initialize() {
-		this.initialized = true
-		logger.info('TokenManager initialized with client', {
-			hasClient: !!this.tokenClient,
-			clientType: this.tokenClient ? typeof this.tokenClient : 'undefined',
-			supportsRefresh:
-				this.tokenClient &&
-				typeof this.tokenClient.supportsRefresh === 'function'
-					? this.tokenClient.supportsRefresh()
-					: 'unknown',
-			hasGetTokenMethod:
-				this.tokenClient && typeof this.tokenClient.getTokenData === 'function'
-					? 'yes'
-					: 'no',
-			hasRefreshMethod:
-				this.tokenClient && typeof this.tokenClient.refresh === 'function'
-					? 'yes'
-					: 'no',
-			// Check for new enhanced features
-			hasTokenEvents: !!this.tokenClient.onTokenEvent,
-			hasReconnect: !!this.tokenClient.handleReconnection,
-			hasForceRefresh: !!this.tokenClient.forceRefresh,
-		})
-	}
-
 	updateTokenClient(tokenClient: SchwabCodeFlowAuth) {
-		logger.info('TokenManager updating token client')
+		logger.info('Updating token client')
 		this.tokenClient = tokenClient
-		this.initialize()
+		this.initialized = true
 	}
 
 	async getAccessToken(): Promise<string | null> {
-		logger.info('TokenManager.getAccessToken called')
+		logger.info('Getting access token')
 		if (!this.initialized || !this.tokenClient) {
-			logger.warn(
-				'TokenManager not properly initialized when getting access token',
-			)
+			logger.warn('TokenManager not properly initialized')
 			return null
 		}
 
@@ -90,22 +59,20 @@ export class TokenManager {
 
 	async ensureValidToken(): Promise<boolean> {
 		try {
-			logger.info('TokenManager.ensureValidToken called')
+			logger.info('Ensuring token validity')
 
 			if (!this.initialized || !this.tokenClient) {
-				logger.warn(
-					'TokenManager not properly initialized when ensuring valid token',
-				)
+				logger.warn('TokenManager not properly initialized')
 				return false
 			}
 
-			// Use enhanced token validation if available
+			// Use enhanced token validation
 			if (this.tokenClient.validateToken) {
 				const validationResult = await this.tokenClient.validateToken()
 
 				if (validationResult.valid) {
 					this.tokenData = validationResult.tokenData ?? null
-					logger.info('Token is valid (using enhanced validation)')
+					logger.info('Token is valid')
 					return true
 				}
 
@@ -114,27 +81,15 @@ export class TokenManager {
 					return await this.refresh()
 				}
 
-				logger.error('Token invalid and cannot be refreshed', validationResult)
+				logger.error('Token invalid and cannot be refreshed')
 				return false
 			}
 
-			// Fall back to original validation logic
+			// If validateToken isn't available, get token data
 			this.tokenData = await this.tokenClient.getTokenData()
 
-			logger.info('Retrieved token data', {
-				hasAccessToken: !!this.tokenData?.accessToken,
-				hasRefreshToken: !!this.tokenData?.refreshToken,
-				expiresAt: this.tokenData?.expiresAt
-					? new Date(this.tokenData.expiresAt).toISOString()
-					: 'undefined',
-				expiresIn: this.tokenData?.expiresAt
-					? Math.floor((this.tokenData.expiresAt - Date.now()) / 1000) +
-						' seconds'
-					: 'unknown',
-			})
-
 			if (!this.tokenData?.accessToken) {
-				logger.error('[ERROR] No access token available')
+				logger.error('No access token available')
 				return false
 			}
 
@@ -146,51 +101,31 @@ export class TokenManager {
 				this.tokenData.expiresAt &&
 				now + bufferTime >= this.tokenData.expiresAt
 			) {
-				logger.info('Token expired or expiring soon, attempting refresh', {
-					now,
-					expiresAt: this.tokenData.expiresAt,
-					expiresIn:
-						Math.floor((this.tokenData.expiresAt - now) / 1000) + ' seconds',
-					bufferTimeSeconds: bufferTime / 1000,
-				})
-
-				// Attempt refresh
+				logger.info('Token expired or expiring soon, attempting refresh')
 				return await this.refresh()
 			}
 
-			logger.info('Token is valid, no refresh needed', {
-				expiresIn: this.tokenData.expiresAt
-					? Math.floor((this.tokenData.expiresAt - now) / 1000) + ' seconds'
-					: 'unknown',
-			})
+			logger.info('Token is valid, no refresh needed')
 			return true
 		} catch (error) {
-			logger.error('Error in token management', {
-				error,
-				errorType:
-					error instanceof Error ? error.constructor.name : typeof error,
-				errorMessage: error instanceof Error ? error.message : String(error),
-				stack: error instanceof Error ? error.stack : undefined,
-			})
+			logger.error('Error validating token', { error })
 			return false
 		}
 	}
 
 	async refresh(): Promise<boolean> {
 		try {
-			logger.info('[TokenManager] Starting token refresh')
+			logger.info('Starting token refresh')
 
 			// Check initialization state
 			if (!this.initialized || !this.tokenClient) {
-				logger.warn(
-					'TokenManager not properly initialized when refreshing token',
-				)
+				logger.warn('TokenManager not properly initialized')
 				return false
 			}
 
-			// Use enhanced forceRefresh if available
+			// Use enhanced forceRefresh
 			if (this.tokenClient.forceRefresh) {
-				logger.info('[TokenManager] Using enhanced force refresh')
+				logger.info('Using enhanced force refresh')
 				const result = await this.tokenClient.forceRefresh({
 					retryOnFailure: true,
 					logDetails: true,
@@ -198,77 +133,51 @@ export class TokenManager {
 
 				// Get updated token data after refresh
 				this.tokenData = await this.tokenClient.getTokenData()
-
-				logger.info('[TokenManager] Enhanced refresh completed', {
-					success: result.success,
-					hasAccessToken: !!this.tokenData?.accessToken,
-					hasRefreshToken: !!this.tokenData?.refreshToken,
-					expiresIn: this.tokenData?.expiresAt
-						? Math.floor((this.tokenData.expiresAt - Date.now()) / 1000) +
-							' seconds'
-						: 'unknown',
-				})
-
 				return result.success
 			}
 
 			// If enhanced refresh isn't available, use standard refresh
-			logger.info(
-				'[TokenManager] Enhanced refresh not available, using standard refresh',
-			)
+			logger.info('Using standard refresh')
 			const tokenData = await this.tokenClient.getTokenData()
 
 			if (!tokenData?.refreshToken) {
-				logger.error('[TokenManager] No refresh token available')
+				logger.error('No refresh token available')
 				return false
 			}
 
-			const result = await this.tokenClient.refresh(tokenData.refreshToken, {
+			// Call refresh without storing the unused result
+			await this.tokenClient.refresh(tokenData.refreshToken, {
 				force: true,
 			})
 			this.tokenData = await this.tokenClient.getTokenData()
 
 			return !!this.tokenData?.accessToken
 		} catch (error) {
-			logger.error('[TokenManager] Token refresh error', {
-				errorType:
-					error instanceof Error ? error.constructor.name : typeof error,
-				message: error instanceof Error ? error.message : String(error),
-				stack: error instanceof Error ? error.stack : undefined,
-			})
+			logger.error('Token refresh error', { error })
 			return false
 		}
 	}
 
-	// Add a dedicated method for handling reconnection
+	// Dedicated method for handling reconnection
 	async handleReconnection(): Promise<boolean> {
 		// Avoid reconnecting too frequently
 		const now = Date.now()
 		if (now - this.lastReconnectTime < 5000) {
-			// 5 seconds minimum between reconnects
-			logger.info(
-				'[TokenManager] Skipping reconnection, too soon after last attempt',
-			)
+			logger.info('Skipping reconnection, too soon after last attempt')
 			return false
 		}
 
 		this.lastReconnectTime = now
-		logger.info('[TokenManager] Handling reconnection explicitly')
+		logger.info('Handling reconnection')
 
 		try {
-			// Use enhanced reconnection handler if available
+			// Use enhanced reconnection handler
 			if (this.tokenClient.handleReconnection) {
-				logger.info('[TokenManager] Using enhanced reconnection handler')
+				logger.info('Using enhanced reconnection handler')
 
 				const result = await this.tokenClient.handleReconnection({
 					forceTokenRefresh: true,
 					validateTokens: true,
-				})
-
-				logger.info('[TokenManager] Enhanced reconnection completed', {
-					success: result.success,
-					tokenRestored: result.tokenRestored,
-					refreshPerformed: result.refreshPerformed,
 				})
 
 				// Update our token data
@@ -279,21 +188,16 @@ export class TokenManager {
 				return result.success
 			}
 
-			// Fall back to manual reconnection
-			logger.info('[TokenManager] Falling back to manual reconnection')
+			// Fall back to manual refresh
+			logger.info('Falling back to manual refresh')
 			return await this.refresh()
 		} catch (error) {
-			logger.error('[TokenManager] Reconnection error', {
-				errorType:
-					error instanceof Error ? error.constructor.name : typeof error,
-				message: error instanceof Error ? error.message : String(error),
-				stack: error instanceof Error ? error.stack : undefined,
-			})
+			logger.error('Reconnection error', { error })
 			return false
 		}
 	}
 
-	// Add a method to get token health diagnostics
+	// Token health diagnostics
 	getTokenDiagnostics() {
 		return {
 			initialized: this.initialized,

@@ -45,90 +45,6 @@ export class MyMCP extends DurableMCP<Props, Env> {
 		version: '0.0.1',
 	})
 
-	private async loadTokenData(): Promise<CodeFlowTokenData | null> {
-		try {
-			// Check if all required token properties are present
-			if (
-				this.props.accessToken &&
-				this.props.refreshToken &&
-				this.props.expiresAt
-			) {
-				const tokenData = {
-					accessToken: this.props.accessToken,
-					refreshToken: this.props.refreshToken,
-					expiresAt: this.props.expiresAt,
-				}
-
-				// Log detailed token state
-				logger.info('Loaded token data from props', {
-					hasAccessToken: !!tokenData.accessToken,
-					hasRefreshToken: !!tokenData.refreshToken,
-					accessTokenLength: tokenData.accessToken.length,
-					refreshTokenLength: tokenData.refreshToken.length,
-					expiresAt: new Date(tokenData.expiresAt).toISOString(),
-					expiresIn:
-						Math.floor((tokenData.expiresAt - Date.now()) / 1000) + ' seconds',
-					isExpired: Date.now() > tokenData.expiresAt,
-				})
-
-				// Verify token data - especially important to check refresh token
-				if (!tokenData.refreshToken || tokenData.refreshToken.length < 10) {
-					logger.error('Invalid refresh token loaded from props', {
-						refreshTokenLength: tokenData.refreshToken?.length || 0,
-					})
-					return null
-				}
-
-				return tokenData
-			}
-
-			// Log which specific props are missing
-			logger.info('Incomplete token data in props', {
-				hasAccessToken: !!this.props.accessToken,
-				hasRefreshToken: !!this.props.refreshToken,
-				hasExpiresAt: !!this.props.expiresAt,
-			})
-
-			return null
-		} catch (error) {
-			logger.error('Error loading token data from props', { error })
-			return null
-		}
-	}
-
-	private async saveTokenData(tokenData: CodeFlowTokenData): Promise<void> {
-		logger.info('Saving token data to props', {
-			hasAccessToken: !!tokenData.accessToken,
-			hasRefreshToken: !!tokenData.refreshToken,
-			expiresIn: tokenData.expiresAt
-				? Math.floor((tokenData.expiresAt - Date.now()) / 1000) + ' seconds'
-				: 'unknown',
-		})
-
-		// Direct assignment with proper type checking
-		if (tokenData.accessToken) this.props.accessToken = tokenData.accessToken
-		if (tokenData.refreshToken) this.props.refreshToken = tokenData.refreshToken
-		if (tokenData.expiresAt) this.props.expiresAt = tokenData.expiresAt
-
-		// Force props to persist immediately
-		try {
-			// Clone props to ensure we're not using a proxy
-			this.props = { ...this.props }
-
-			// Log state of critical tokens after save attempt
-			logger.info('Token state after save attempt', {
-				propsHasAccessToken: !!this.props.accessToken,
-				propsHasRefreshToken: !!this.props.refreshToken,
-				propsTokenLength: this.props.accessToken?.length || 0,
-				propsRefreshTokenLength: this.props.refreshToken?.length || 0,
-				propsExpiresAt: this.props.expiresAt,
-				tokensSaved: !!(this.props.accessToken && this.props.refreshToken),
-			})
-		} catch (error) {
-			logger.error('Error saving token data to props', { error })
-		}
-	}
-
 	async init() {
 		try {
 			logger.info('Initializing Schwab MCP server')
@@ -157,9 +73,31 @@ export class MyMCP extends DurableMCP<Props, Env> {
 						clientId: this.env.SCHWAB_CLIENT_ID,
 						clientSecret: this.env.SCHWAB_CLIENT_SECRET,
 						redirectUri: redirectUri,
-						save: async (tokens: CodeFlowTokenData) =>
-							this.saveTokenData(tokens),
-						load: async () => this.loadTokenData(),
+						save: async (tokens: CodeFlowTokenData) => {
+							// Store tokens directly in props
+							if (tokens.accessToken)
+								this.props.accessToken = tokens.accessToken
+							if (tokens.refreshToken)
+								this.props.refreshToken = tokens.refreshToken
+							if (tokens.expiresAt) this.props.expiresAt = tokens.expiresAt
+							// Force props to persist immediately
+							this.props = { ...this.props }
+						},
+						load: async () => {
+							// Return tokens from props if available
+							if (
+								this.props.accessToken &&
+								this.props.refreshToken &&
+								this.props.expiresAt
+							) {
+								return {
+									accessToken: this.props.accessToken,
+									refreshToken: this.props.refreshToken,
+									expiresAt: this.props.expiresAt,
+								}
+							}
+							return null
+						},
 					},
 					// Add configuration for the enhanced token manager
 					enhancedConfig: {
@@ -297,7 +235,6 @@ export class MyMCP extends DurableMCP<Props, Env> {
 				) {
 					logger.info('SSE connection attempt detected via RPC', {
 						method: request.method,
-						hasParams: !!request.params,
 					})
 					await this.onReconnect()
 				}
@@ -372,17 +309,6 @@ export class MyMCP extends DurableMCP<Props, Env> {
 					toolParams =
 						Object.keys(filteredParams).length > 0 ? filteredParams : {}
 
-					// Enhanced parameter logging
-					logger.info('Tool call request details', {
-						toolName,
-						hasArguments: !!request.params?.arguments,
-						hasParams: !!request.params?.params,
-						argumentsReceived: JSON.stringify(request.params?.arguments),
-						paramsReceived: JSON.stringify(request.params?.params),
-						filteredParams: JSON.stringify(toolParams),
-						requestParams: JSON.stringify(request.params),
-					})
-
 					// Validate tool name
 					if (!toolName) {
 						return {
@@ -444,20 +370,18 @@ export class MyMCP extends DurableMCP<Props, Env> {
 							toolName.startsWith('transactions')
 
 						if (isApiTool) {
-							logger.info(
-								'API tool detected, ensuring valid token before proceeding',
-								{ toolName },
-							)
+							logger.info('API tool detected, checking token validity')
 
 							// Check if connection state is valid
 							if (!this.client || !this.centralTokenManager) {
 								logger.warn(
-									'Client or token manager not initialized during API call, attempting recovery',
+									'Client or token manager not initialized, attempting recovery',
 								)
 								await this.onReconnect()
 							}
 
-							const tokenValid = await this.ensureValidToken()
+							const tokenValid =
+								await this.centralTokenManager.ensureValidToken()
 
 							if (!tokenValid) {
 								return {
@@ -498,7 +422,6 @@ export class MyMCP extends DurableMCP<Props, Env> {
 						logger.error('Error invoking tool', {
 							toolName,
 							error: toolError,
-							paramsUsed: JSON.stringify(toolParams),
 						})
 
 						return {
@@ -556,74 +479,35 @@ export class MyMCP extends DurableMCP<Props, Env> {
 
 		try {
 			// Use the dedicated reconnection handler from our centralized token manager
-			if (
-				this.centralTokenManager &&
-				this.centralTokenManager.handleReconnection
-			) {
-				logger.info('Using enhanced reconnection handler')
+			if (this.centralTokenManager?.handleReconnection) {
 				const reconnectSuccess =
 					await this.centralTokenManager.handleReconnection()
 
 				if (reconnectSuccess) {
-					logger.info('Enhanced reconnection successful')
-
-					// Log token diagnostics
-					if (this.centralTokenManager.getTokenDiagnostics) {
-						const diagnostics = this.centralTokenManager.getTokenDiagnostics()
-						logger.info('Token diagnostics after reconnection', diagnostics)
-					}
-
+					logger.info('Reconnection successful')
 					return true
-				} else {
-					logger.warn('Enhanced reconnection failed')
-					return false
 				}
 			}
 
 			// If the enhanced handler isn't available, we need to initialize
-			logger.warn('Enhanced reconnection handler not available, reinitializing')
+			logger.warn('Standard reconnection handling failed, reinitializing')
 			await this.init()
 			return true
 		} catch (error) {
-			logger.error('Error during reconnection handling', {
-				error,
-				errorType:
-					error instanceof Error ? error.constructor.name : typeof error,
-				message: error instanceof Error ? error.message : String(error),
-			})
+			logger.error('Error during reconnection handling', { error })
 			return false
 		}
 	}
 
-	// Replace the existing ensureValidToken method with one that uses the centralized manager
+	// Simplified token validation - just delegate to token manager
 	private async ensureValidToken(): Promise<boolean> {
-		return this.centralTokenManager.ensureValidToken()
+		return this.centralTokenManager?.ensureValidToken() ?? false
 	}
 
-	// Add more detailed tracking of SSE connections
+	// Simplified SSE connection handler
 	async onSSE(event: any) {
-		logger.info('SSE connection established or reconnected', {
-			source: 'onSSE',
-			hasUrl: !!event?.url,
-			urlParams: event?.url ? event.url.split('?')[1] || 'none' : 'url-missing',
-		})
-
-		// Attempt reconnection handling if needed
-		const isReconnect = event?.url?.includes?.('reconnect=true') || false
-		if (isReconnect) {
-			logger.info('Handling explicit SSE reconnection')
-			const reconnectSuccess = await this.onReconnect()
-			if (!reconnectSuccess) {
-				logger.warn('Reconnection failed to restore auth state')
-			} else {
-				logger.info('Reconnection successfully restored auth state')
-			}
-		} else {
-			// Always perform a light reconnect check even without the flag
-			logger.info('Performing routine reconnection check for SSE')
-			await this.onReconnect()
-		}
-
+		logger.info('SSE connection established or reconnected')
+		await this.onReconnect()
 		return await super.onSSE(event)
 	}
 }
