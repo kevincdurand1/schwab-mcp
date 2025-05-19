@@ -25,7 +25,7 @@ export class TokenManager {
 		this.initialized = true
 
 		// Subscribe to token events if available
-		if (this.tokenClient.onTokenEvent) {
+		if (this.tokenClient?.onTokenEvent) {
 			this.tokenClient.onTokenEvent((event) => {
 				logger.info(`Token event: ${event.type}`)
 
@@ -67,7 +67,7 @@ export class TokenManager {
 			}
 
 			// Use enhanced token validation
-			if (this.tokenClient.validateToken) {
+			if (this.tokenClient?.validateToken) {
 				const validationResult = await this.tokenClient.validateToken()
 
 				if (validationResult.valid) {
@@ -119,7 +119,7 @@ export class TokenManager {
 			}
 
 			// Use enhanced forceRefresh
-			if (this.tokenClient.forceRefresh) {
+			if (this.tokenClient?.forceRefresh) {
 				logger.info('Using enhanced force refresh')
 				const result = await this.tokenClient.forceRefresh({
 					retryOnFailure: true,
@@ -160,7 +160,7 @@ export class TokenManager {
 
 		try {
 			// Use enhanced reconnection handler
-			if (this.tokenClient.handleReconnection) {
+			if (this.tokenClient?.handleReconnection) {
 				const result = await this.tokenClient.handleReconnection({
 					forceTokenRefresh: true,
 					validateTokens: true,

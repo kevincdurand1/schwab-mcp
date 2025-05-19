@@ -1,13 +1,13 @@
 import OAuthProvider from '@cloudflare/workers-oauth-provider'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import {
-	AuthStrategy,
-	createApiClient,
-	createSchwabAuth,
-} from '@sudowealth/schwab-api'
+import { createApiClient, type SchwabApiClient } from '@sudowealth/schwab-api'
 import { DurableMCP } from 'workers-mcp'
 import { SchwabHandler } from './auth'
-import { type CodeFlowTokenData, type SchwabCodeFlowAuth } from './auth/client'
+import {
+	type CodeFlowTokenData,
+	type SchwabCodeFlowAuth,
+	initializeSchwabAuthClient,
+} from './auth/client'
 import { TokenManager } from './auth/tokenManager'
 import { logger } from './shared/logger'
 import { initializeTokenManager } from './shared/utils'
@@ -31,14 +31,14 @@ type Props = {
 	accessToken: string
 	refreshToken: string
 	expiresAt: number
-	// Add a property to track registered tools to ensure persistence
+	// Track registered tools to ensure persistence
 	registeredTools: string[]
 }
 
 export class MyMCP extends DurableMCP<Props, Env> {
 	private tokenManager!: SchwabCodeFlowAuth
 	private centralTokenManager!: TokenManager
-	private client!: any
+	private client!: SchwabApiClient
 
 	server = new McpServer({
 		name: 'Schwab MCP',
@@ -65,65 +65,39 @@ export class MyMCP extends DurableMCP<Props, Env> {
 				// Create fresh auth components
 				logger.info('Creating auth components')
 
-				// Define the complete config with the enhanced options
-				const authConfig = {
-					// Use the new enhanced strategy instead of CODE_FLOW
-					strategy: AuthStrategy.ENHANCED,
-					oauthConfig: {
-						clientId: this.env.SCHWAB_CLIENT_ID,
-						clientSecret: this.env.SCHWAB_CLIENT_SECRET,
-						redirectUri: redirectUri,
-						save: async (tokens: CodeFlowTokenData) => {
-							// Store tokens directly in props
-							if (tokens.accessToken)
-								this.props.accessToken = tokens.accessToken
-							if (tokens.refreshToken)
-								this.props.refreshToken = tokens.refreshToken
-							if (tokens.expiresAt) this.props.expiresAt = tokens.expiresAt
-							// Force props to persist immediately
-							this.props = { ...this.props }
-						},
-						load: async () => {
-							// Return tokens from props if available
-							if (
-								this.props.accessToken &&
-								this.props.refreshToken &&
-								this.props.expiresAt
-							) {
-								return {
-									accessToken: this.props.accessToken,
-									refreshToken: this.props.refreshToken,
-									expiresAt: this.props.expiresAt,
-								}
-							}
-							return null
-						},
-					},
-					// Add configuration for the enhanced token manager
-					enhancedConfig: {
-						persistence: {
-							validateOnLoad: true,
-							validateOnSave: true,
-							events: true,
-						},
-						reconnection: {
-							enabled: true,
-							retryOnTransientErrors: true,
-							maxRetries: 3,
-							backoffFactor: 1.5,
-						},
-						diagnostics: {
-							logTokenState: true,
-							detailedErrors: true,
-						},
-					},
+				// Define token persistence functions
+				const saveToken = async (tokens: CodeFlowTokenData) => {
+					// Store tokens directly in props
+					if (tokens.accessToken) this.props.accessToken = tokens.accessToken
+					if (tokens.refreshToken) this.props.refreshToken = tokens.refreshToken
+					if (tokens.expiresAt) this.props.expiresAt = tokens.expiresAt
+					// Force props to persist immediately
+					this.props = { ...this.props }
 				}
 
-				// Use type assertion to bypass TypeScript restrictions
-				const auth = createSchwabAuth(authConfig as any)
+				const loadToken = async () => {
+					// Return tokens from props if available
+					if (
+						this.props.accessToken &&
+						this.props.refreshToken &&
+						this.props.expiresAt
+					) {
+						return {
+							accessToken: this.props.accessToken,
+							refreshToken: this.props.refreshToken,
+							expiresAt: this.props.expiresAt,
+						}
+					}
+					return null
+				}
 
-				// Store auth in tokenManager
-				this.tokenManager = auth as unknown as SchwabCodeFlowAuth
+				// Use the shared auth client initialization function
+				this.tokenManager = initializeSchwabAuthClient(
+					this.env,
+					redirectUri,
+					loadToken,
+					saveToken,
+				)
 
 				// Create centralized token manager and make it available to utilities
 				this.centralTokenManager = new TokenManager(this.tokenManager)
@@ -132,7 +106,7 @@ export class MyMCP extends DurableMCP<Props, Env> {
 				// Create API client with auth
 				this.client = createApiClient({
 					config: { environment: 'PRODUCTION' },
-					auth,
+					auth: this.tokenManager,
 				})
 			}
 
@@ -191,16 +165,13 @@ export class MyMCP extends DurableMCP<Props, Env> {
 
 			// Register all tools and track them
 			await this.registerTools(this.client)
-
-			// Override JSON-RPC handler to add parameter handling
-			this.setupCustomRpcHandler()
 		} catch (error) {
 			logger.error('Error during initialization', { error })
 			throw error
 		}
 	}
 
-	private async registerTools(client: any) {
+	private async registerTools(client: SchwabApiClient) {
 		// Register Schwab API tools
 		registerAccountTools(this.server, client)
 		registerInstrumentTools(this.server, client)
@@ -214,263 +185,6 @@ export class MyMCP extends DurableMCP<Props, Env> {
 
 		// Force props to persist without using save() directly
 		this.props = { ...this.props }
-	}
-
-	private setupCustomRpcHandler() {
-		// @ts-ignore - Accessing internal properties for parameter handling
-		const originalJsonRpcHandler = this.server.jsonRpcHandler
-		// @ts-ignore - Overriding internal method for parameter handling
-		this.server.jsonRpcHandler = async (request) => {
-			try {
-				logger.info('Incoming RPC request', {
-					method: request.method,
-					params: JSON.stringify(request.params),
-					id: request.id,
-				})
-
-				// Handle SSE connections and reconnections
-				if (
-					request.method === 'sse/connect' ||
-					request.method === 'sse/connect_client'
-				) {
-					logger.info('SSE connection attempt detected via RPC', {
-						method: request.method,
-					})
-					await this.onReconnect()
-				}
-
-				// Handle tools/list with extra logging
-				if (request.method === 'tools/list') {
-					logger.info('Handling tools/list request', {
-						registeredToolsInProps: this.props.registeredTools,
-					})
-
-					// If we don't have tools in the server but have them in props, re-register
-					// @ts-ignore - Using internal property for debugging
-					const serverToolCount = Object.keys(this.server.tools || {}).length
-					if (serverToolCount === 0 && this.props.registeredTools.length > 0) {
-						logger.warn(
-							'Tools missing from server but found in props, re-registering',
-						)
-						await this.registerTools(null) // Pass null client since we're just re-registering diagnostic tools
-					}
-				}
-
-				// Handle tools/call with extra validation and parameter fix
-				if (request.method === 'tools/call') {
-					const toolName = request.params?.name
-
-					// IMPORTANT FIX: Handle multiple parameter formats and normalize them
-					let toolParams = {}
-
-					// 1. Check if params are in request.params.arguments (most likely format)
-					if (request.params?.arguments !== undefined) {
-						if (typeof request.params.arguments === 'object') {
-							toolParams = request.params.arguments
-						} else {
-							// Handle non-object arguments (might be string, number, etc.)
-							toolParams = { value: request.params.arguments }
-						}
-					}
-					// 2. Check if params are in request.params.params
-					else if (request.params?.params !== undefined) {
-						if (typeof request.params.params === 'object') {
-							toolParams = request.params.params
-						} else {
-							toolParams = { value: request.params.params }
-						}
-					}
-					// 3. Check if other fields in request.params might be parameters
-					else {
-						// Collect all fields except 'name' as possible parameters
-						const potentialParams = { ...request.params }
-						if (potentialParams.name) {
-							delete potentialParams.name
-						}
-
-						// If there are other fields, use them as parameters
-						if (Object.keys(potentialParams).length > 0) {
-							toolParams = potentialParams
-						}
-					}
-
-					// CRITICAL FIX: Filter out system properties to isolate user parameters
-					const systemProperties = ['signal', 'sessionId', 'requestId', 'name']
-					const filteredParams = { ...toolParams } as Record<string, any>
-
-					// Remove system properties from parameters
-					for (const prop of systemProperties) {
-						if (prop in filteredParams) {
-							delete filteredParams[prop]
-						}
-					}
-
-					// Use filtered parameters
-					toolParams =
-						Object.keys(filteredParams).length > 0 ? filteredParams : {}
-
-					// Validate tool name
-					if (!toolName) {
-						return {
-							jsonrpc: '2.0',
-							id: request.id,
-							error: {
-								code: -32602,
-								message: 'Invalid params: missing tool name',
-								data: {
-									availableTools: this.props.registeredTools,
-								},
-							},
-						}
-					}
-
-					// Handle unknown tool
-					if (!this.props.registeredTools.includes(toolName)) {
-						// Check if tool exists in server but not in props
-						// @ts-ignore - Using internal property for debugging
-						const serverTools = Object.keys(this.server.tools || {})
-						if (serverTools.includes(toolName)) {
-							// Tool exists in server but not in props, add it to props
-							this.props.registeredTools.push(toolName)
-							// Force props to persist without using save() directly
-							this.props = { ...this.props }
-							logger.info(`Added missing tool to props: ${toolName}`)
-						} else {
-							return {
-								jsonrpc: '2.0',
-								id: request.id,
-								result: {
-									content: [
-										{
-											type: 'text',
-											text: `The requested tool '${toolName}' was not found.`,
-										},
-										{
-											type: 'text',
-											text: `Available tools: ${this.props.registeredTools.join(', ')}`,
-										},
-									],
-								},
-							}
-						}
-					}
-
-					// Fix for parameter passing - manually invoke the tool function
-					try {
-						// For Schwab API tools, check token validity first
-						const isApiTool =
-							toolName.startsWith('accounts') ||
-							toolName.startsWith('instruments') ||
-							toolName.startsWith('marketHours') ||
-							toolName.startsWith('movers') ||
-							toolName.startsWith('options') ||
-							toolName.startsWith('orders') ||
-							toolName.startsWith('priceHistory') ||
-							toolName.startsWith('quotes') ||
-							toolName.startsWith('transactions')
-
-						if (isApiTool) {
-							logger.info('API tool detected, checking token validity')
-
-							// Check if connection state is valid
-							if (!this.client || !this.centralTokenManager) {
-								logger.warn(
-									'Client or token manager not initialized, attempting recovery',
-								)
-								await this.onReconnect()
-							}
-
-							const tokenValid =
-								await this.centralTokenManager.ensureValidToken()
-
-							if (!tokenValid) {
-								return {
-									jsonrpc: '2.0',
-									id: request.id,
-									result: {
-										content: [
-											{
-												type: 'text',
-												text: 'Authentication required: Please authenticate with Schwab to use API tools',
-											},
-										],
-									},
-								}
-							}
-						}
-
-						// Normal case for tools
-						// @ts-ignore - Accessing tools object directly
-						const toolInfo = this.server.tools[toolName]
-						if (toolInfo && typeof toolInfo.handler === 'function') {
-							logger.info('Invoking tool handler with parameters', {
-								toolName,
-								paramsBeingPassed: JSON.stringify(toolParams),
-							})
-
-							// Call the handler directly with the filtered params
-							const result = await toolInfo.handler(toolParams)
-
-							// Return a proper JSON-RPC response
-							return {
-								jsonrpc: '2.0',
-								id: request.id,
-								result: result,
-							}
-						}
-					} catch (toolError) {
-						logger.error('Error invoking tool', {
-							toolName,
-							error: toolError,
-						})
-
-						return {
-							jsonrpc: '2.0',
-							id: request.id,
-							result: {
-								content: [
-									{
-										type: 'text',
-										text: `Error calling tool: ${(toolError as Error).message}`,
-									},
-								],
-							},
-						}
-					}
-				}
-
-				// Call original handler for non-tool/call requests
-				const result = await originalJsonRpcHandler.call(this.server, request)
-				return result
-			} catch (error) {
-				logger.error('Error handling RPC request', {
-					method: request.method,
-					error,
-				})
-
-				// For tools/call errors, try to provide better diagnostics
-				if (request.method === 'tools/call' && request.id) {
-					return {
-						jsonrpc: '2.0',
-						id: request.id,
-						result: {
-							content: [
-								{
-									type: 'text',
-									text: `Error calling tool: ${(error as Error).message || 'Unknown error'}`,
-								},
-								{
-									type: 'text',
-									text: `Available tools: ${this.props.registeredTools.join(', ')}`,
-								},
-							],
-						},
-					}
-				}
-
-				throw error
-			}
-		}
 	}
 
 	// Simplified reconnection method using enhanced features

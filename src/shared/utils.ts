@@ -15,10 +15,9 @@ export function initializeTokenManager(manager: TokenManager) {
 /**
  * Ensures a valid token is available before making API requests
  *
- * @param client The Schwab API client
  * @returns True if token is valid and ready to use
  */
-async function ensureValidToken(): Promise<boolean> {
+export async function ensureValidToken(): Promise<boolean> {
 	try {
 		// Use the centralized token manager
 		if (tokenManagerInstance) {
@@ -88,13 +87,13 @@ export function mergeShapes<T extends z.ZodRawShape[]>(
 /**
  * Wraps an API request with token authentication
  *
- * @param client The Schwab API client
+ * @param client The Schwab API client (not used as we use the central token manager)
  * @param fn The API function to call
  * @param args Arguments to pass to the API function
  * @returns The result of the API call
  */
 export async function withTokenAuth<T, Args extends any[]>(
-	client: SchwabApiClient,
+	_client: SchwabApiClient,
 	fn: (...args: Args) => Promise<T>,
 	...args: Args
 ): Promise<T> {
