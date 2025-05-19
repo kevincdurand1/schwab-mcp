@@ -134,10 +134,14 @@ export class TokenManager {
 				return false
 			}
 
+			// Get current token data
 			const beforeRefresh = await this.tokenClient.getTokenData()
+
+			// Log detailed token state before refresh attempt
 			logger.info('[TokenManager] Token before refresh', {
 				hasAccessToken: !!beforeRefresh?.accessToken,
 				hasRefreshToken: !!beforeRefresh?.refreshToken,
+				refreshTokenLength: beforeRefresh?.refreshToken?.length || 0,
 				expiresAt: beforeRefresh?.expiresAt
 					? new Date(beforeRefresh.expiresAt).toISOString()
 					: 'undefined',
@@ -149,20 +153,43 @@ export class TokenManager {
 					: 'none',
 			})
 
-			// Check if refresh token is available
-			if (!beforeRefresh?.refreshToken) {
-				logger.error('[TokenManager] Refresh token is missing, cannot refresh')
+			// Check if refresh token is available and valid
+			if (
+				!beforeRefresh?.refreshToken ||
+				beforeRefresh.refreshToken.length < 10
+			) {
+				logger.error(
+					'[TokenManager] Refresh token is missing or invalid (length: ' +
+						(beforeRefresh?.refreshToken?.length || 0) +
+						')',
+				)
 				return false
 			}
 
-			logger.info('[TokenManager] Calling refresh()...')
-			const result = await this.tokenClient.refresh()
-			logger.info('[TokenManager] Refresh call completed', { result })
+			// Attempt refresh with explicitly provided refresh token
+			logger.info(
+				'[TokenManager] Calling refresh with explicit refresh token...',
+			)
 
+			// Call refresh with the refresh token explicitly to avoid relying on internal state
+			const result = await this.tokenClient.refresh(
+				beforeRefresh.refreshToken,
+				{ force: true },
+			)
+
+			logger.info('[TokenManager] Refresh call completed', {
+				result: result ? 'success' : 'failure',
+				resultType: typeof result,
+			})
+
+			// Verify token data after refresh
 			const afterRefresh = await this.tokenClient.getTokenData()
+
+			// Log detailed token state after refresh
 			logger.info('[TokenManager] Token after refresh', {
 				hasAccessToken: !!afterRefresh?.accessToken,
 				hasRefreshToken: !!afterRefresh?.refreshToken,
+				refreshTokenLength: afterRefresh?.refreshToken?.length || 0,
 				expiresAt: afterRefresh?.expiresAt
 					? new Date(afterRefresh.expiresAt).toISOString()
 					: 'undefined',
@@ -173,14 +200,16 @@ export class TokenManager {
 					? afterRefresh.refreshToken.substring(0, 10) + '...'
 					: 'none',
 				tokensChanged: beforeRefresh?.accessToken !== afterRefresh?.accessToken,
-				result: result,
+				result: result ? 'success' : 'failure',
 			})
 
 			this.tokenData = afterRefresh
 			const success = !!afterRefresh?.accessToken
+
 			logger.info(
 				'[TokenManager] Refresh ' + (success ? 'successful' : 'failed'),
 			)
+
 			return success
 		} catch (error) {
 			logger.error('[TokenManager] Token refresh error', {

@@ -46,27 +46,54 @@ export class MyMCP extends DurableMCP<Props, Env> {
 	})
 
 	private async loadTokenData(): Promise<CodeFlowTokenData | null> {
-		if (
-			this.props.accessToken &&
-			this.props.refreshToken &&
-			this.props.expiresAt
-		) {
-			const tokenData = {
-				accessToken: this.props.accessToken,
-				refreshToken: this.props.refreshToken,
-				expiresAt: this.props.expiresAt,
+		try {
+			// Check if all required token properties are present
+			if (
+				this.props.accessToken &&
+				this.props.refreshToken &&
+				this.props.expiresAt
+			) {
+				const tokenData = {
+					accessToken: this.props.accessToken,
+					refreshToken: this.props.refreshToken,
+					expiresAt: this.props.expiresAt,
+				}
+
+				// Log detailed token state
+				logger.info('Loaded token data from props', {
+					hasAccessToken: !!tokenData.accessToken,
+					hasRefreshToken: !!tokenData.refreshToken,
+					accessTokenLength: tokenData.accessToken.length,
+					refreshTokenLength: tokenData.refreshToken.length,
+					expiresAt: new Date(tokenData.expiresAt).toISOString(),
+					expiresIn:
+						Math.floor((tokenData.expiresAt - Date.now()) / 1000) + ' seconds',
+					isExpired: Date.now() > tokenData.expiresAt,
+				})
+
+				// Verify token data - especially important to check refresh token
+				if (!tokenData.refreshToken || tokenData.refreshToken.length < 10) {
+					logger.error('Invalid refresh token loaded from props', {
+						refreshTokenLength: tokenData.refreshToken?.length || 0,
+					})
+					return null
+				}
+
+				return tokenData
 			}
 
-			logger.info('Loaded token data from props', {
-				hasAccessToken: !!tokenData.accessToken,
-				expiresIn:
-					Math.floor((tokenData.expiresAt - Date.now()) / 1000) + ' seconds',
+			// Log which specific props are missing
+			logger.info('Incomplete token data in props', {
+				hasAccessToken: !!this.props.accessToken,
+				hasRefreshToken: !!this.props.refreshToken,
+				hasExpiresAt: !!this.props.expiresAt,
 			})
 
-			return tokenData
+			return null
+		} catch (error) {
+			logger.error('Error loading token data from props', { error })
+			return null
 		}
-		logger.info('No token data found in props')
-		return null
 	}
 
 	private async saveTokenData(tokenData: CodeFlowTokenData): Promise<void> {
@@ -78,12 +105,28 @@ export class MyMCP extends DurableMCP<Props, Env> {
 				: 'unknown',
 		})
 
-		this.props.accessToken = tokenData.accessToken
-		this.props.refreshToken = tokenData.refreshToken
-		this.props.expiresAt = tokenData.expiresAt
+		// Direct assignment with proper type checking
+		if (tokenData.accessToken) this.props.accessToken = tokenData.accessToken
+		if (tokenData.refreshToken) this.props.refreshToken = tokenData.refreshToken
+		if (tokenData.expiresAt) this.props.expiresAt = tokenData.expiresAt
 
-		// Force props to persist by making a shallow copy and triggering automatic persistence
-		this.props = { ...this.props }
+		// Force props to persist immediately
+		try {
+			// Clone props to ensure we're not using a proxy
+			this.props = { ...this.props }
+
+			// Log state of critical tokens after save attempt
+			logger.info('Token state after save attempt', {
+				propsHasAccessToken: !!this.props.accessToken,
+				propsHasRefreshToken: !!this.props.refreshToken,
+				propsTokenLength: this.props.accessToken?.length || 0,
+				propsRefreshTokenLength: this.props.refreshToken?.length || 0,
+				propsExpiresAt: this.props.expiresAt,
+				tokensSaved: !!(this.props.accessToken && this.props.refreshToken),
+			})
+		} catch (error) {
+			logger.error('Error saving token data to props', { error })
+		}
 	}
 
 	async init() {
@@ -488,56 +531,92 @@ export class MyMCP extends DurableMCP<Props, Env> {
 		logger.info('Handling reconnection')
 
 		try {
+			// First, always try to load token data regardless of initialization state
+			const tokenData = await this.loadTokenData()
+
+			// Log token state for debugging
+			logger.info('Token state during reconnection', {
+				hasTokenData: !!tokenData,
+				hasAccessToken: !!tokenData?.accessToken,
+				hasRefreshToken: !!tokenData?.refreshToken,
+				expiresAt: tokenData?.expiresAt
+					? new Date(tokenData.expiresAt).toISOString()
+					: 'none',
+				isExpired: tokenData?.expiresAt
+					? Date.now() > tokenData.expiresAt
+					: true,
+				hasClient: !!this.client,
+				hasTokenManager: !!this.tokenManager,
+				hasCentralTokenManager: !!this.centralTokenManager,
+			})
+
 			// Check if we need full reinitialization
 			if (!this.client || !this.centralTokenManager || !this.tokenManager) {
-				logger.info('Client or token manager not initialized, reinitializing')
+				logger.info(
+					'Client or token manager not initialized, performing full reinitializing',
+				)
 				await this.init()
+
+				// After initialization, try to force token refresh if we have data
+				if (tokenData && tokenData.refreshToken) {
+					logger.info('Forcing token refresh after initialization')
+
+					// Create new token data object for refreshing
+					const refreshTokenData = {
+						accessToken: tokenData.accessToken,
+						refreshToken: tokenData.refreshToken,
+						expiresAt: 0, // Force refresh by setting to expired
+					}
+
+					// Explicitly save this token data to ensure refresh token is available
+					await this.saveTokenData(refreshTokenData)
+
+					// Attempt a token refresh
+					await this.centralTokenManager.refresh()
+				}
+
 				return true
 			}
 
-			// Try loading token data from props
-			const tokenData = await this.loadTokenData()
-			if (tokenData) {
-				logger.info('Successfully loaded token data during reconnection')
+			// If components exist but token data is missing/invalid, we need to re-authenticate
+			if (!tokenData || !tokenData.refreshToken) {
+				logger.warn('Missing or invalid token data during reconnection')
+				return false
+			}
 
-				// Update the token manager with fresh data if needed
-				if (!this.tokenManager) {
-					logger.warn('TokenManager missing, recreating during reconnection')
+			// If token is expired, try to refresh it
+			if (tokenData.expiresAt && Date.now() > tokenData.expiresAt) {
+				logger.info('Token expired during reconnection, attempting refresh')
 
-					const redirectUri = 'https://schwab-mcp.dyeoman2.workers.dev/callback'
-					const auth = createSchwabAuth({
-						strategy: AuthStrategy.CODE_FLOW,
-						oauthConfig: {
-							clientId: this.env.SCHWAB_CLIENT_ID,
-							clientSecret: this.env.SCHWAB_CLIENT_SECRET,
-							redirectUri: redirectUri,
-							save: async (tokens) => this.saveTokenData(tokens),
-							load: async () => this.loadTokenData(),
-						},
-					})
+				// Update the token manager with the loaded data to ensure refresh token is available
+				await this.saveTokenData(tokenData)
 
-					// Store auth in tokenManager
-					this.tokenManager = auth as unknown as SchwabCodeFlowAuth
-
-					// Update central token manager
-					this.centralTokenManager = new TokenManager(this.tokenManager)
-					initializeTokenManager(this.centralTokenManager)
-				} else if (this.centralTokenManager) {
-					// If token manager exists, just ensure it has latest tokens
-					logger.info('Updating existing token manager during reconnection')
+				// Force token refreshing
+				const refreshSuccess = await this.centralTokenManager.refresh()
+				if (!refreshSuccess) {
+					logger.warn('Token refresh failed during reconnection')
+					return false
 				}
+
+				logger.info('Token successfully refreshed during reconnection')
 			}
 
 			// Ensure token is still valid
 			const tokenValid = await this.ensureValidToken()
 			if (!tokenValid) {
-				logger.warn('Token invalid during reconnection')
+				logger.warn('Token validation failed during reconnection')
 				return false
 			}
 
+			logger.info('Reconnection successful, token is valid')
 			return true
 		} catch (error) {
-			logger.error('Error during reconnection handling', { error })
+			logger.error('Error during reconnection handling', {
+				error,
+				errorType:
+					error instanceof Error ? error.constructor.name : typeof error,
+				message: error instanceof Error ? error.message : String(error),
+			})
 			return false
 		}
 	}
