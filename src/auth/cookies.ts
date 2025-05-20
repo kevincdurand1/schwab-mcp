@@ -1,4 +1,10 @@
+import { logger } from '../shared/logger'
 import { AuthError, formatAuthError } from './errorMessages'
+import {
+	decodeAndVerifyState,
+	extractClientIdFromState,
+	type StateData,
+} from './stateUtils'
 
 const MCP_APPROVAL = 'mcp-approved-clients'
 const ONE_YEAR_IN_SECONDS = 31536000
@@ -7,66 +13,29 @@ const ONE_YEAR_IN_SECONDS = 31536000
 
 /**
  * Converts an ArrayBuffer to a hex string
+ * Uses Buffer in Node.js-compatible environments (enabled with nodejs_compat)
  */
 function toHex(buffer: ArrayBuffer): string {
-	return Array.from(new Uint8Array(buffer))
-		.map((b) => b.toString(16).padStart(2, '0'))
-		.join('')
+	// Using Buffer is more standard when available in the Workers environment
+	return Buffer.from(buffer).toString('hex')
 }
 
 /**
  * Converts a hex string to an ArrayBuffer
+ * Uses Buffer in Node.js-compatible environments (enabled with nodejs_compat)
+ * 
+ * @param hexString - A hexadecimal string
+ * @returns ArrayBuffer representation of the hex string
  */
 function fromHex(hexString: string): ArrayBuffer {
-	const bytes = new Uint8Array(
-		hexString.match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16)),
-	)
-	return bytes.buffer
-}
-
-/**
- * Decodes a base64 string to Uint8Array.
- * @param base64Payload - The base64 encoded string.
- * @returns Uint8Array containing the decoded data.
- */
-function decodeBase64Payload(base64Payload: string): Uint8Array {
-	try {
-		// First convert base64 to string representation of binary data
-		const binaryString = atob(base64Payload)
-		// Then convert to actual Uint8Array
-		const decodedBytes = new Uint8Array(binaryString.length)
-		for (let i = 0; i < binaryString.length; i++) {
-			decodedBytes[i] = binaryString.charCodeAt(i)
-		}
-		return decodedBytes
-	} catch (e) {
-		console.warn('Invalid base64 payload:', e)
-		throw new Error('Failed to decode base64 payload')
+	// Validate hex string format
+	if (!/^[0-9a-fA-F]*$/.test(hexString)) {
+		logger.warn('Invalid hex string format detected')
+		throw new Error('Invalid hex string format')
 	}
-}
-
-/**
- * Decodes a URL-safe base64 string back to its original data.
- * Safely handles base64 decoding before attempting to parse JSON.
- *
- * @param encoded - The URL-safe base64 encoded string.
- * @returns The original data.
- */
-function decodeState<T = any>(encoded: string): T {
-	try {
-		// Step 1: Decode base64 to Uint8Array
-		const bytes = decodeBase64Payload(encoded)
-
-		// Step 2: Convert to string for JSON parsing
-		const jsonString = new TextDecoder().decode(bytes)
-
-		// Step 3: Parse JSON
-		return JSON.parse(jsonString) as T
-	} catch (e) {
-		console.error('Error decoding state:', e)
-		const errorInfo = formatAuthError(AuthError.COOKIE_DECODE_ERROR)
-		throw new Error(errorInfo.message)
-	}
+	
+	// Using Buffer is more standard when available in the Workers environment
+	return Buffer.from(hexString, 'hex').buffer
 }
 
 /**
@@ -126,82 +95,165 @@ async function verifySignature(
 			enc.encode(data),
 		)
 	} catch (e) {
-		console.error('Error verifying signature:', e)
+		logger.error('Error verifying signature:', e)
 		return false
 	}
 }
 
 /**
- * Parses the signed cookie and verifies its integrity.
+ * Parses a cookie string and extracts the value of the specified cookie.
+ * @param cookieHeader - The raw cookie header string.
+ * @param cookieName - The name of the cookie to extract.
+ * @returns The cookie value if found, undefined otherwise.
+ */
+function extractCookieValue(
+	cookieHeader: string | null,
+	cookieName: string,
+): string | undefined {
+	if (!cookieHeader) return undefined
+
+	const cookies = cookieHeader.split(';').map((c) => c.trim())
+	const targetCookie = cookies.find((c) => c.startsWith(`${cookieName}=`))
+
+	if (!targetCookie) return undefined
+	return targetCookie.substring(cookieName.length + 1)
+}
+
+/**
+ * Verifies and decodes a signed cookie value.
+ * Separates signature verification from content parsing for better security.
+ *
+ * @param cookieValue - The raw cookie value in format "signature.payload".
+ * @param secret - The secret key used for signing.
+ * @returns A promise resolving to the decoded payload if signature is valid, undefined otherwise.
+ */
+async function verifyAndDecodeCookie<T>(
+	cookieValue: string | undefined,
+	secret: string,
+): Promise<T | undefined> {
+	if (!cookieValue) return undefined
+
+	const parts = cookieValue.split('.')
+	if (parts.length !== 2) {
+		const errorInfo = formatAuthError(AuthError.INVALID_COOKIE_FORMAT)
+		logger.warn(errorInfo.message)
+		return undefined
+	}
+
+	// TypeScript doesn't know that we've already checked parts.length === 2
+	// so we need to assert the types manually
+	const signatureHex = parts[0]
+	const base64Payload = parts[1]
+
+	// Step 1: Parse the base64 payload to get the raw string
+	let payloadString: string
+	try {
+		// base64Payload must be a string because it comes from parts[1]
+		// and we've already checked that parts.length === 2
+		if (typeof base64Payload !== 'string') {
+			logger.warn('Invalid base64 payload format: not a string')
+			return undefined
+		}
+		const binaryString = atob(base64Payload)
+		payloadString = binaryString
+	} catch (e) {
+		logger.warn('Invalid base64 payload in cookie:', e)
+		return undefined
+	}
+
+	// Step 2: Verify HMAC signature before parsing JSON
+	const key = await importKey(secret)
+	if (typeof signatureHex !== 'string') {
+		logger.warn('Invalid signature format: not a string')
+		return undefined
+	}
+	const isValid = await verifySignature(key, signatureHex, payloadString)
+
+	if (!isValid) {
+		const errorInfo = formatAuthError(AuthError.COOKIE_SIGNATURE_FAILED)
+		logger.warn(errorInfo.message)
+		return undefined
+	}
+
+	// Step 3: Parse JSON only after signature validation
+	try {
+		return JSON.parse(payloadString) as T
+	} catch (e) {
+		logger.error('Error parsing cookie payload:', e)
+		return undefined
+	}
+}
+
+/**
+ * Creates a signed cookie string in the format "signature.base64(payload)".
+ * @param payload - The data to store in the cookie.
+ * @param secret - The secret key used for signing.
+ * @returns A promise resolving to the signed cookie value.
+ */
+async function createSignedCookie(
+	payload: any,
+	secret: string,
+): Promise<string> {
+	const stringifiedPayload = JSON.stringify(payload)
+	const key = await importKey(secret)
+	const signature = await signData(key, stringifiedPayload)
+	return `${signature}.${btoa(stringifiedPayload)}`
+}
+
+/**
+ * Creates a Set-Cookie header value for the approval cookie.
+ * @param cookieValue - The signed cookie value.
+ * @returns The Set-Cookie header value.
+ */
+function createApprovalCookieHeader(cookieValue: string): string {
+	return `${MCP_APPROVAL}=${cookieValue}; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=${ONE_YEAR_IN_SECONDS}`
+}
+
+/**
+ * Extracts and validates the approved clients from the cookie.
  * @param cookieHeader - The value of the Cookie header from the request.
  * @param secret - The secret key used for signing.
  * @returns A promise resolving to the list of approved client IDs if the cookie is valid, otherwise undefined.
  */
-async function getApprovedClientsFromCookie(
+async function parseApprovalCookie(
 	cookieHeader: string | null,
 	secret: string,
 ): Promise<string[] | undefined> {
-	if (!cookieHeader) return undefined
-
-	const cookies = cookieHeader.split(';').map((c) => c.trim())
-	const targetCookie = cookies.find((c) => c.startsWith(`${MCP_APPROVAL}=`))
-
-	if (!targetCookie) return undefined
-
-	const cookieValue = targetCookie.substring(MCP_APPROVAL.length + 1)
-	const parts = cookieValue.split('.')
-
-	if (parts.length !== 2) {
-		const errorInfo = formatAuthError(AuthError.INVALID_COOKIE_FORMAT)
-		console.warn(errorInfo.message)
-		return undefined
-	}
-
-	const [signatureHex, base64Payload] = parts
-
-	// Step 1: Safe base64 decode to Uint8Array (no JSON.parse yet)
-	let decodedBytes: Uint8Array
-	try {
-		decodedBytes = decodeBase64Payload(base64Payload as string)
-	} catch (e) {
-		console.warn('Invalid base64 payload in cookie:', e)
-		return undefined
-	}
-
-	// Convert Uint8Array back to string for signature verification
-	const payloadString = new TextDecoder().decode(decodedBytes)
-
-	// Step 2: Verify HMAC signature on raw bytes before parsing JSON
-	const key = await importKey(secret)
-	const isValid = await verifySignature(
-		key,
-		signatureHex as string,
-		payloadString,
+	const cookieValue = extractCookieValue(cookieHeader, MCP_APPROVAL)
+	const approvedClients = await verifyAndDecodeCookie<string[]>(
+		cookieValue,
+		secret,
 	)
 
-	if (!isValid) {
-		const errorInfo = formatAuthError(AuthError.COOKIE_SIGNATURE_FAILED)
-		console.warn(errorInfo.message)
-		return undefined
-	}
-
-	// Step 3: JSON.parse only after signature passes
-	try {
-		const approvedClients = JSON.parse(payloadString)
+	// Additional validation for array content
+	if (approvedClients) {
 		if (!Array.isArray(approvedClients)) {
-			console.warn('Cookie payload is not an array.')
+			logger.warn('Cookie payload is not an array.')
 			return undefined
 		}
+
 		// Ensure all elements are strings
 		if (!approvedClients.every((item) => typeof item === 'string')) {
-			console.warn('Cookie payload contains non-string elements.')
+			logger.warn('Cookie payload contains non-string elements.')
 			return undefined
 		}
-		return approvedClients as string[]
-	} catch (e) {
-		console.error('Error parsing cookie payload:', e)
-		return undefined
 	}
+
+	return approvedClients
+}
+
+/**
+ * Sets the approval cookie with the provided client IDs.
+ * @param approvedClients - Array of approved client IDs.
+ * @param secret - The secret key used for signing.
+ * @returns A promise resolving to the Set-Cookie header value.
+ */
+async function setApprovalCookie(
+	approvedClients: string[],
+	secret: string,
+): Promise<string> {
+	const cookieValue = await createSignedCookie(approvedClients, secret)
+	return createApprovalCookieHeader(cookieValue)
 }
 
 // --- Exported Functions ---
@@ -222,10 +274,7 @@ export async function clientIdAlreadyApproved(
 ): Promise<boolean> {
 	if (!clientId) return false
 	const cookieHeader = request.headers.get('Cookie')
-	const approvedClients = await getApprovedClientsFromCookie(
-		cookieHeader,
-		cookieSecret,
-	)
+	const approvedClients = await parseApprovalCookie(cookieHeader, cookieSecret)
 
 	return approvedClients?.includes(clientId) ?? false
 }
@@ -235,7 +284,7 @@ export async function clientIdAlreadyApproved(
  */
 export interface ParsedApprovalResult {
 	/** The original state object passed through the form. */
-	state: any
+	state: StateData
 	/** Headers to set on the redirect response, including the Set-Cookie header. */
 	headers: Record<string, string>
 }
@@ -258,27 +307,24 @@ export async function parseRedirectApproval(
 		throw new Error(errorInfo.message)
 	}
 
-	let state: any
-	let clientId: string | undefined
+	let encodedState: string
+	let state: StateData
+	let clientId: string
 
 	try {
 		const formData = await request.formData()
-		const encodedState = formData.get('state')
+		const stateParam = formData.get('state')
 
-		if (typeof encodedState !== 'string' || !encodedState) {
+		if (typeof stateParam !== 'string' || !stateParam) {
 			const errorInfo = formatAuthError(AuthError.MISSING_FORM_STATE)
 			throw new Error(errorInfo.message)
 		}
 
-		state = decodeState<{ oauthReqInfo?: { clientId?: string } }>(encodedState) // Decode the state
-		clientId = state?.oauthReqInfo?.clientId // Extract clientId from within the state
-
-		if (!clientId) {
-			const errorInfo = formatAuthError(AuthError.CLIENT_ID_EXTRACTION_ERROR)
-			throw new Error(errorInfo.message)
-		}
+		encodedState = stateParam
+		state = decodeAndVerifyState(encodedState)
+		clientId = extractClientIdFromState(state)
 	} catch (e) {
-		console.error('Error processing form submission:', e)
+		logger.error('Error processing form submission:', e)
 		// Rethrow with centralized error format
 		throw new Error(
 			`Failed to parse approval form: ${e instanceof Error ? e.message : String(e)}`,
@@ -288,29 +334,23 @@ export async function parseRedirectApproval(
 	// Get existing approved clients
 	const cookieHeader = request.headers.get('Cookie')
 	const existingApprovedClients =
-		(await getApprovedClientsFromCookie(cookieHeader, cookieSecret)) ?? []
+		(await parseApprovalCookie(cookieHeader, cookieSecret)) ?? []
 
 	// Add the newly approved client ID (avoid duplicates)
 	const updatedApprovedClients = Array.from(
 		new Set([...existingApprovedClients, clientId]),
 	)
 
-	// Sign the updated list
-	const payload = JSON.stringify(updatedApprovedClients)
-	const key = await importKey(cookieSecret)
-	const signature = await signData(key, payload)
-	const newCookieValue = `${signature}.${btoa(payload)}` // signature.base64(payload)
+	// Create the Set-Cookie header
+	const cookieHeaderValue = await setApprovalCookie(
+		updatedApprovedClients,
+		cookieSecret,
+	)
 
-	// Generate Set-Cookie header
-	const headers: Record<string, string> = {
-		'Set-Cookie': `${MCP_APPROVAL}=${newCookieValue}; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=${ONE_YEAR_IN_SECONDS}`,
+	// Return result with headers
+	return {
+		state,
+		headers: { 'Set-Cookie': cookieHeaderValue },
 	}
-
-	return { state, headers }
 }
 
-/**
- * Re-exports the renderApprovalDialog function from the UI module
- * for backward compatibility.
- */
-export { renderApprovalDialog } from './ui'

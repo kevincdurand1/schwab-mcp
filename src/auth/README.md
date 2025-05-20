@@ -14,15 +14,14 @@ The token management has been redesigned using a state machine approach to:
 4. Improve diagnostic capabilities
 5. Provide a single source of truth for token refresh operations
 
-> **Important:** All token refresh operations must go through the `TokenStateMachine`.
-> The state machine is the single source of truth for token state management and ensures
-> consistent lifecycle management across the application.
+> **Important:** All token refresh operations must go through the
+> `TokenStateMachine`. The state machine is the single source of truth for token
+> state management and ensures consistent lifecycle management across the
+> application.
 
 ## Implementation Files
 
 - `tokenStateMachine.ts` - Core implementation of the state machine
-- `exampleUsage.ts` - Examples showing how to use the state machine
-- `migrateToStateMachine.md` - Detailed migration guide
 
 ## State Diagram
 
@@ -69,7 +68,7 @@ import { initializeTokenManager } from './shared/utils'
 // Create auth client
 // Note: The auth client does not directly manage token refresh operations
 // It only provides the underlying API calls that the state machine uses
-const auth = initializeSchwabAuthClient(env, redirectUri)
+const auth = initializeSchwabAuthClient(redirectUri)
 
 // Create token state machine - this is the source of truth for token management
 const tokenStateMachine = new TokenStateMachine(auth)
@@ -132,5 +131,7 @@ following key methods:
 3. **Simplified Logic**: Each state handles only the transitions relevant to it
 4. **Comprehensive Diagnostics**: Better visibility into current token state
 5. **Consistent Behavior**: Predictable token lifecycle handling
-6. **Single Source of Truth**: All token refresh operations are centralized in the state machine
-7. **Clear Responsibility Separation**: Auth client handles API calls while state machine manages lifecycle
+6. **Single Source of Truth**: All token refresh operations are centralized in
+   the state machine
+7. **Clear Responsibility Separation**: Auth client handles API calls while
+   state machine manages lifecycle

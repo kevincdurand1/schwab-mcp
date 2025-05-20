@@ -1,10 +1,9 @@
 import {
-	type AuthRequest,
 	type OAuthHelpers,
 } from '@cloudflare/workers-oauth-provider'
 import { createApiClient } from '@sudowealth/schwab-api'
 import { Hono } from 'hono'
-import { EnvConfig } from '../config/envConfig'
+import { getEnvironment } from '../config'
 import { logger } from '../shared/logger'
 import { type Env } from '../types/env'
 import {
@@ -14,10 +13,17 @@ import {
 } from './client'
 import { clientIdAlreadyApproved, parseRedirectApproval } from './cookies'
 import { AuthError, formatAuthError } from './errorMessages'
+import { ensureEnvInitialized } from './middlewares'
+import { decodeAndVerifyState, extractClientIdFromState } from './stateUtils'
 import { renderApprovalDialog } from './ui'
 
 // Create Hono app with appropriate bindings
 const app = new Hono<{ Bindings: Env & { OAUTH_PROVIDER: OAuthHelpers } }>()
+
+// Apply middleware to ensure environment is initialized
+app.use('*', ensureEnvInitialized)
+
+// No need to store config locally, we'll use the centralized environment
 
 /**
  * GET /authorize - Entry point for OAuth authorization flow
@@ -28,9 +34,6 @@ const app = new Hono<{ Bindings: Env & { OAUTH_PROVIDER: OAuthHelpers } }>()
  */
 app.get('/authorize', async (c) => {
 	try {
-		// Environment config is initialized at startup
-		// No need to initialize here
-
 		const oauthReqInfo = await c.env.OAUTH_PROVIDER.parseAuthRequest(c.req.raw)
 		const { clientId } = oauthReqInfo
 
@@ -45,7 +48,7 @@ app.get('/authorize', async (c) => {
 			await clientIdAlreadyApproved(
 				c.req.raw,
 				oauthReqInfo.clientId,
-				EnvConfig.COOKIE_ENCRYPTION_KEY,
+				getEnvironment().COOKIE_ENCRYPTION_KEY,
 			)
 		) {
 			return redirectToSchwab(c, oauthReqInfo)
@@ -76,12 +79,9 @@ app.get('/authorize', async (c) => {
  */
 app.post('/authorize', async (c) => {
 	try {
-		// Environment config is initialized at startup
-		// No need to initialize here
-
 		const { state, headers } = await parseRedirectApproval(
 			c.req.raw,
-			EnvConfig.COOKIE_ENCRYPTION_KEY,
+			getEnvironment().COOKIE_ENCRYPTION_KEY,
 		)
 
 		if (!state.oauthReqInfo) {
@@ -90,7 +90,23 @@ app.post('/authorize', async (c) => {
 			return c.text('Invalid request', errorInfo.status)
 		}
 
-		return redirectToSchwab(c, state.oauthReqInfo, headers)
+		// The state.oauthReqInfo comes from our cookies handling,
+		// which is now properly typed as AuthRequest
+		const oauthReqInfo = state.oauthReqInfo
+
+		// Validate required AuthRequest fields before passing to redirectToSchwab
+		if (!oauthReqInfo?.clientId || !oauthReqInfo?.scope) {
+			const errorInfo = formatAuthError(AuthError.INVALID_STATE)
+			logger.error(errorInfo.message, {
+				missingFields: {
+					clientId: !oauthReqInfo?.clientId,
+					scope: !oauthReqInfo?.scope,
+				},
+			})
+			return c.text('Invalid state information', errorInfo.status)
+		}
+
+		return redirectToSchwab(c, oauthReqInfo, headers)
 	} catch (error) {
 		const errorInfo = formatAuthError(AuthError.AUTH_APPROVAL_ERROR, { error })
 		logger.error(errorInfo.message, { error })
@@ -120,33 +136,53 @@ app.get('/callback', async (c) => {
 			return c.text(errorInfo.message, errorInfo.status)
 		}
 
-		// Parse the state to get the oauthReqInfo
-		const oauthReqInfo = JSON.parse(atob(stateParam)) as AuthRequest
-		if (!oauthReqInfo.clientId) {
+		// Parse the state using our utility function
+		const state = decodeAndVerifyState(stateParam)
+		const clientId = extractClientIdFromState(state)
+
+		// Get the oauthReqInfo from the state
+		const oauthReqInfo = state.oauthReqInfo
+		if (!oauthReqInfo) {
 			const errorInfo = formatAuthError(AuthError.INVALID_STATE)
 			logger.error(errorInfo.message)
 			return c.text(errorInfo.message, errorInfo.status)
 		}
 
+		// Validate required AuthRequest fields
+		if (
+			!oauthReqInfo?.clientId ||
+			!oauthReqInfo?.redirectUri ||
+			!oauthReqInfo?.scope
+		) {
+			const errorInfo = formatAuthError(AuthError.INVALID_STATE)
+			logger.error(errorInfo.message, {
+				missingFields: {
+					clientId: !oauthReqInfo?.clientId,
+					redirectUri: !oauthReqInfo?.redirectUri,
+					scope: !oauthReqInfo?.scope,
+				},
+			})
+			return c.text(errorInfo.message, errorInfo.status)
+		}
+
 		// Set up redirect URI and token storage for KV
-		const redirectUri = new URL('/callback', c.req.raw.url).href
-		const userId = oauthReqInfo.clientId
+		const redirectUri = getEnvironment().SCHWAB_REDIRECT_URI
+		const userId = clientId
 
 		const saveToken = async (tokenData: CodeFlowTokenData) => {
-			await EnvConfig.OAUTH_KV?.put(
+			await getEnvironment().OAUTH_KV?.put(
 				`token:${userId}`,
 				JSON.stringify(tokenData),
 			)
 		}
 
 		const loadToken = async (): Promise<CodeFlowTokenData | null> => {
-			const tokenStr = await EnvConfig.OAUTH_KV?.get(`token:${userId}`)
+			const tokenStr = await getEnvironment().OAUTH_KV?.get(`token:${userId}`)
 			return tokenStr ? (JSON.parse(tokenStr) as CodeFlowTokenData) : null
 		}
 
-		// Always use the original env object for auth client to ensure consistency
+		// Use the validated config for auth client to ensure consistency
 		const auth = initializeSchwabAuthClient(
-			c.env,
 			redirectUri,
 			loadToken,
 			saveToken,

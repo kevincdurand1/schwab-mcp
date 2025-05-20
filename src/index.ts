@@ -2,18 +2,17 @@ import OAuthProvider from '@cloudflare/workers-oauth-provider'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { createApiClient, type SchwabApiClient } from '@sudowealth/schwab-api'
 import { DurableMCP } from 'workers-mcp'
-import { SchwabHandler } from './auth'
 import {
+	SchwabHandler,
+	initializeTokenManager,
 	type CodeFlowTokenData,
 	type SchwabCodeFlowAuth,
 	initializeSchwabAuthClient,
-} from './auth/client'
+} from './auth'
 import { type ITokenManager } from './auth/tokenInterface'
 import { TokenStateMachine } from './auth/tokenStateMachine'
-import { EnvConfig } from './config/envConfig'
+import { initializeEnvironment } from './config'
 import { logger } from './shared/logger'
-import { initializeTokenManager as initializeToolTokenManager } from './shared/toolBuilder'
-import { initializeTokenManager as initializeUtilTokenManager } from './shared/utils'
 import {
 	registerAccountTools,
 	registerInstrumentTools,
@@ -25,10 +24,9 @@ import {
 	registerQuotesTools,
 	registerTransactionTools,
 } from './tools'
+import { type ValidatedEnv } from './types/env'
 
 type Props = {
-	name: string
-	email: string
 	accessToken: string
 	refreshToken: string
 	expiresAt: number
@@ -38,6 +36,7 @@ export class MyMCP extends DurableMCP<Props, Env> {
 	private tokenManager!: SchwabCodeFlowAuth
 	private centralTokenManager!: ITokenManager
 	private client!: SchwabApiClient
+	private validatedConfig!: ValidatedEnv
 
 	server = new McpServer({
 		name: 'Schwab MCP',
@@ -48,17 +47,12 @@ export class MyMCP extends DurableMCP<Props, Env> {
 		try {
 			logger.info('Initializing Schwab MCP server')
 
-			// Initialize and validate environment configuration first
-			logger.info('Initializing environment configuration')
-			EnvConfig.initialize(this.env)
+			// Initialize and validate environment configuration once, centrally
+			// This will initialize if not already done, or return the existing config
+			this.validatedConfig = initializeEnvironment(this.env)
 
-			// Validate all required environment variables at once
-			// This will throw an error if any required variable is missing
-			logger.info('Validating environment configuration')
-			EnvConfig.validateEnvironment(true)
-			logger.info('Environment validation successful')
-
-			const redirectUri = 'https://schwab-mcp.dyeoman2.workers.dev/callback'
+			// Use the configured redirect URI from environment
+			const redirectUri = this.validatedConfig.SCHWAB_REDIRECT_URI
 
 			// Preserve existing auth if present during reconnection
 			if (this.tokenManager && this.client && this.centralTokenManager) {
@@ -97,7 +91,6 @@ export class MyMCP extends DurableMCP<Props, Env> {
 
 				// Use the shared auth client initialization function
 				this.tokenManager = initializeSchwabAuthClient(
-					this.env,
 					redirectUri,
 					loadToken,
 					saveToken,
@@ -107,10 +100,8 @@ export class MyMCP extends DurableMCP<Props, Env> {
 				logger.info('Using TokenStateMachine for token management')
 				this.centralTokenManager = new TokenStateMachine(this.tokenManager)
 
-				// Single point of initialization for all token managers
-				logger.info('Initializing token managers in a single location')
-				initializeUtilTokenManager(this.centralTokenManager)
-				initializeToolTokenManager(this.centralTokenManager)
+				// Initialize the centralized token manager singleton
+				initializeTokenManager(this.centralTokenManager)
 
 				// Create API client with auth
 				this.client = createApiClient({
@@ -266,11 +257,6 @@ export class MyMCP extends DurableMCP<Props, Env> {
 			logger.error('Error during reconnection handling', { error })
 			return false
 		}
-	}
-
-	// Simplified token validation - just delegate to token manager
-	private async ensureValidToken(): Promise<boolean> {
-		return this.centralTokenManager?.ensureValidToken() ?? false
 	}
 
 	// Simplified SSE connection handler

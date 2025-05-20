@@ -38,6 +38,7 @@ Create a new
 ```bash
 npx wrangler secret put SCHWAB_CLIENT_ID
 npx wrangler secret put SCHWAB_CLIENT_SECRET
+npx wrangler secret put SCHWAB_REDIRECT_URI
 npx wrangler secret put COOKIE_ENCRYPTION_KEY # add any random string here e.g. openssl rand -hex 32
 npx wrangler secret put HOSTED_DOMAIN # optional: use this when restrict google account domain
 ```

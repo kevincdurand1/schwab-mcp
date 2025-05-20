@@ -1,20 +1,11 @@
 import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { type SchwabApiClient } from '@sudowealth/schwab-api'
 import { z } from 'zod'
-import { type ITokenManager } from '../auth/tokenInterface'
 import { type Result } from '../types/result'
+import { type FormattedSuccessPayload } from './formatters'
 import { logger } from './logger'
 
-// Store a reference to the token manager
-let tokenManagerInstance: ITokenManager | null = null
-
-/**
- * Initialize the token manager used by tools
- */
-export function initializeTokenManager(manager: ITokenManager) {
-	logger.info('Initializing tokenManager in toolBuilder')
-	tokenManagerInstance = manager
-}
+// Use the centralized token manager instead of maintaining a separate reference
 
 /**
  * A simplified response type for all tools
@@ -24,31 +15,39 @@ export type ToolResponse<T = any> =
 	| { success: false; error: Error; details?: Record<string, any> }
 
 /**
+ * Represents the structure of MCP content array responses
+ */
+export type McpContentArray = {
+	content: Array<{ type: string; text: string }>;
+	isError?: boolean;
+}
+
+/**
  * Converts a ToolResponse to the MCP content array format
  */
-function formatResponse(response: ToolResponse | Result<any>): any {
+function formatResponse(response: ToolResponse | Result<any>): McpContentArray {
 	// Handle ToolResponse format
 	if (response && 'success' in response) {
 		if (response.success) {
+			// Get the data payload from either ToolResponse or Result
+			const dataToLog = 'data' in response ? response.data : null;
+			
+			// Determine the message to display
+			const message = 
+				('message' in response && response.message) || 
+				(dataToLog && (dataToLog as any).message) || 
+				'Operation successful';
+
 			// Create a valid content array for MCP
 			return {
 				content: [
 					{
 						type: 'text',
-						text:
-							'message' in response && response.message
-								? response.message
-								: 'data' in response && response.data?.message
-									? response.data.message
-									: 'Operation successful',
+						text: message,
 					},
 					{
 						type: 'text',
-						text: JSON.stringify(
-							'data' in response ? response.data : response,
-							null,
-							2,
-						),
+						text: JSON.stringify(dataToLog, null, 2),
 					},
 				],
 			}
@@ -126,11 +125,16 @@ export function mergeShapes<T extends z.ZodRawShape[]>(
  * Creates and registers a tool with the MCP server
  *
  * This unified tool factory function handles common patterns in tool implementations:
- * 1. Validates access token (best-effort - proceeds even if validation fails)
+ * 1. Validates access token through the centralized TokenStateMachine
  * 2. Validates input against provided schema
  * 3. Executes the handler with validated input
  * 4. Formats responses consistently
  * 5. Manages error handling and logging
+ *
+ * NOTE: This is the recommended approach for building tools that require authentication.
+ * The token validation is handled automatically by the centralized token manager,
+ * so there's no need to call ensureValidToken() or use other token validation methods
+ * in your tool handlers.
  *
  * @param client The Schwab API client
  * @param server The MCP server instance
@@ -149,7 +153,7 @@ export function createTool<S extends z.ZodSchema<any, any>>(
 		handler: (
 			input: z.infer<S>,
 			client: SchwabApiClient,
-		) => Promise<ToolResponse | Result<any> | any>
+		) => Promise<ToolResponse | Result<FormattedSuccessPayload<any>> | any>
 	},
 ) {
 	server.tool(
@@ -159,17 +163,9 @@ export function createTool<S extends z.ZodSchema<any, any>>(
 			try {
 				logger.info(`Invoking tool: ${name}`)
 
-				// Try to validate token but proceed anyway (best-effort)
-				try {
-					if (tokenManagerInstance) {
-						await tokenManagerInstance.ensureValidToken()
-					}
-				} catch (tokenError) {
-					logger.warn(`Token validation warning for tool: ${name}`, {
-						tokenError,
-					})
-					// Continue execution even if token validation fails
-				}
+				// Token validation is handled by the centralized TokenStateMachine
+				// Tool handlers don't need to worry about token validation
+				// All API calls will automatically use the valid token from TokenStateMachine
 
 				// Parse input
 				let parsedInput: z.infer<S>

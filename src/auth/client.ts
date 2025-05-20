@@ -9,7 +9,7 @@ import {
 } from '@sudowealth/schwab-api'
 import { type Context } from 'hono'
 import { type BlankInput } from 'hono/types'
-import { EnvConfig } from '../config/envConfig'
+import { getEnvironment } from '../config'
 import { logger } from '../shared/logger'
 import { type Env } from '../types/env'
 import { AuthError, formatAuthError } from './errorMessages'
@@ -60,6 +60,7 @@ export interface ReconnectionResult {
 	tokenRestored: boolean
 	refreshPerformed: boolean
 	error?: Error | null
+	tokenData?: CodeFlowTokenData
 }
 
 /**
@@ -94,32 +95,22 @@ export interface SchwabCodeFlowAuth {
 /**
  * Creates a Schwab Auth client with enhanced features
  *
- * @param env Environment variables containing Schwab API credentials
  * @param redirectUri OAuth callback URI
  * @param load Function to load tokens from storage
  * @param save Function to save tokens to storage
  * @returns Initialized Schwab auth client
  */
 export function initializeSchwabAuthClient(
-	env: Env,
 	redirectUri: string,
 	load?: () => Promise<CodeFlowTokenData | null>,
 	save?: (tokenData: CodeFlowTokenData) => Promise<void>,
 ): SchwabCodeFlowAuth {
-	// EnvConfig should already be initialized and validated at app startup
-	// We don't need to reinitialize, but we'll ensure it's available
-	if (!EnvConfig.isInitialized()) {
-		// This is a fallback for cases where initialization hasn't happened yet
-		// It should be rare and ideally never happen in production
-		logger.warn(
-			'EnvConfig not initialized. Initializing now, but this should happen at app startup.',
-		)
-		EnvConfig.initialize(env)
-	}
+	// Get credentials directly from the centralized environment
+	const env = getEnvironment()
+	const clientId = env.SCHWAB_CLIENT_ID
+	const clientSecret = env.SCHWAB_CLIENT_SECRET
 
-	// Use the environment variables from EnvConfig which performs validation
-	const clientId = EnvConfig.SCHWAB_CLIENT_ID
-	const clientSecret = EnvConfig.SCHWAB_CLIENT_SECRET
+	logger.debug('Using centralized environment for Schwab Auth client')
 
 	logger.info('Initializing enhanced Schwab Auth client', {
 		hasLoadFunction: !!load,
@@ -186,9 +177,9 @@ export async function redirectToSchwab(
 	headers: HeadersInit = {},
 ): Promise<Response> {
 	try {
-		// Environment should already be validated during app initialization
-		const redirectUri = new URL('/callback', c.req.raw.url).href
-		const auth = initializeSchwabAuthClient(c.env, redirectUri)
+		// Use the configured redirect URI from environment
+		const redirectUri = getEnvironment().SCHWAB_REDIRECT_URI
+		const auth = initializeSchwabAuthClient(redirectUri)
 
 		// Get the authorization URL
 		const { authUrl } = auth.getAuthorizationUrl()

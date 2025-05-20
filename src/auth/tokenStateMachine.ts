@@ -4,6 +4,7 @@ import {
 	type CodeFlowTokenData,
 	type TokenLifecycleEvent,
 	type TokenRefreshResult,
+	type ReconnectionResult,
 } from './client'
 import { type ITokenManager } from './tokenInterface'
 
@@ -12,14 +13,47 @@ type TokenData = CodeFlowTokenData
 
 /**
  * Token state machine states
+ *
+ * This enum represents all possible states the token can be in:
+ * - uninitialized: Initial state with no token data (also used during initialization)
+ * - valid: Token is loaded and valid (not expired)
+ * - expired: Token is loaded but expired or will expire soon
+ * - refreshing: Token refresh is in progress
+ * - error: An error occurred during token operations
  */
 type TokenState =
-	| { status: 'uninitialized' }
-	| { status: 'initializing' }
+	| { status: 'uninitialized'; isInitializing?: boolean }
 	| { status: 'valid'; tokenData: TokenData }
 	| { status: 'expired'; tokenData: TokenData }
 	| { status: 'refreshing'; tokenData: TokenData }
 	| { status: 'error'; error: Error }
+
+/**
+ * Events emitted by the token state machine
+ */
+export type TokenStateEvent = {
+	type: 'state-change' | 'refresh-attempt' | 'reconnect-attempt'
+	previousState?: string
+	newState?: string
+	timestamp: number
+	success?: boolean
+	error?: Error
+	metadata?: Record<string, any>
+}
+
+/**
+ * Token state event listener type
+ */
+export type TokenStateEventListener = (event: TokenStateEvent) => void
+
+/**
+ * Result of token data validation
+ */
+interface ValidateTokenResult {
+	valid: boolean
+	tokenData?: TokenData
+	reason?: string
+}
 
 /**
  * Token state machine implementation that centralizes token management logic
@@ -33,47 +67,150 @@ export class TokenStateMachine implements ITokenManager {
 	private state: TokenState = { status: 'uninitialized' }
 	private tokenClient: SchwabCodeFlowAuth
 	private lastReconnectTime = 0
+	private stateEventListeners: TokenStateEventListener[] = []
 
 	/**
 	 * Internal methods for state transitions to ensure consistent state updates
 	 */
-	private transitionToUninitialized(): void {
-		this.state = { status: 'uninitialized' }
-		logger.info('Token state: uninitialized')
-	}
+	private transitionToUninitialized(isInitializing: boolean = false): void {
+		const previousState = this.state.status
+		this.state = { status: 'uninitialized', isInitializing }
 
-	private transitionToInitializing(): void {
-		this.state = { status: 'initializing' }
-		logger.info('Token state: initializing')
+		const stateDescription = isInitializing ? 'initializing' : 'uninitialized'
+		logger.info(`Token state: ${stateDescription}`)
+
+		this.emitStateEvent({
+			type: 'state-change',
+			previousState,
+			newState: 'uninitialized',
+			timestamp: Date.now(),
+			metadata: {
+				isInitializing,
+			},
+		})
 	}
 
 	private transitionToValid(tokenData: TokenData): void {
+		const previousState = this.state.status
 		this.state = { status: 'valid', tokenData }
 		logger.info('Token state: valid')
+
+		this.emitStateEvent({
+			type: 'state-change',
+			previousState,
+			newState: 'valid',
+			timestamp: Date.now(),
+			metadata: {
+				expiresAt: tokenData.expiresAt,
+				expiresIn: Math.floor((tokenData.expiresAt - Date.now()) / 1000),
+			},
+		})
 	}
 
 	private transitionToExpired(tokenData: TokenData): void {
+		const previousState = this.state.status
 		this.state = { status: 'expired', tokenData }
 		logger.info('Token state: expired')
+
+		this.emitStateEvent({
+			type: 'state-change',
+			previousState,
+			newState: 'expired',
+			timestamp: Date.now(),
+			metadata: {
+				expiresAt: tokenData.expiresAt,
+				expiresIn: Math.floor((tokenData.expiresAt - Date.now()) / 1000),
+			},
+		})
 	}
 
 	private transitionToRefreshing(tokenData: TokenData): void {
+		const previousState = this.state.status
 		this.state = { status: 'refreshing', tokenData }
 		logger.info('Token state: refreshing')
+
+		this.emitStateEvent({
+			type: 'state-change',
+			previousState,
+			newState: 'refreshing',
+			timestamp: Date.now(),
+			metadata: {
+				expiresAt: tokenData.expiresAt,
+				expiresIn: Math.floor((tokenData.expiresAt - Date.now()) / 1000),
+			},
+		})
 	}
 
 	private transitionToError(error: Error): void {
+		const previousState = this.state.status
 		this.state = { status: 'error', error }
 		logger.error('Token state: error', { error })
+
+		this.emitStateEvent({
+			type: 'state-change',
+			previousState,
+			newState: 'error',
+			timestamp: Date.now(),
+			error,
+		})
+	}
+
+	/**
+	 * Emit a state event to all registered listeners
+	 */
+	private emitStateEvent(event: TokenStateEvent): void {
+		// Add timestamp if not provided
+		if (!event.timestamp) {
+			event.timestamp = Date.now()
+		}
+
+		// Notify all listeners
+		for (const listener of this.stateEventListeners) {
+			try {
+				listener(event)
+			} catch (error) {
+				logger.error('Error in token state event listener', { error })
+			}
+		}
+	}
+
+	/**
+	 * Add a listener for token state events
+	 */
+	public onStateEvent(listener: TokenStateEventListener): void {
+		this.stateEventListeners.push(listener)
+	}
+
+	/**
+	 * Remove a listener for token state events
+	 */
+	public offStateEvent(listener: TokenStateEventListener): void {
+		this.stateEventListeners = this.stateEventListeners.filter(
+			(l) => l !== listener,
+		)
 	}
 
 	constructor(tokenClient: SchwabCodeFlowAuth) {
 		this.tokenClient = tokenClient
 
-		// Subscribe to token events
+		// Subscribe to token events from the client
 		if (this.tokenClient?.onTokenEvent) {
 			this.tokenClient.onTokenEvent(this.handleTokenEvent.bind(this))
 		}
+
+		// Set up logging of state events
+		this.onStateEvent((event) => {
+			if (event.type === 'state-change') {
+				logger.info(
+					`Token state transition: ${event.previousState} -> ${event.newState}`,
+				)
+			} else {
+				logger.debug(`Token event: ${event.type}`, {
+					success: event.success,
+					metadata: event.metadata,
+				})
+			}
+		})
 	}
 
 	/**
@@ -85,34 +222,51 @@ export class TokenStateMachine implements ITokenManager {
 		switch (event.type) {
 			case 'load':
 				if (event.tokenData) {
-					const validTokenData = this.ensureValidTokenData(event.tokenData)
-					if (validTokenData) {
+					const validationResult = this.validateTokenData(event.tokenData)
+
+					if (validationResult.valid && validationResult.tokenData) {
+						const validTokenData = validationResult.tokenData
+
 						if (this.isTokenExpired(validTokenData)) {
+							logger.info('Loaded token is expired, updating state')
 							this.transitionToExpired(validTokenData)
 						} else {
+							logger.info('Loaded token is valid')
 							this.transitionToValid(validTokenData)
 						}
+					} else if (validationResult.reason) {
+						logger.warn(
+							`Token load event validation failed: ${validationResult.reason}`,
+						)
 					}
 				}
 				break
 
 			case 'refresh':
 				if (event.tokenData) {
-					const validTokenData = this.ensureValidTokenData(event.tokenData)
-					if (validTokenData) {
-						this.transitionToValid(validTokenData)
+					const validationResult = this.validateTokenData(event.tokenData)
+
+					if (validationResult.valid && validationResult.tokenData) {
+						logger.info('Refreshed token received, updating state')
+						this.transitionToValid(validationResult.tokenData)
+					} else if (validationResult.reason) {
+						logger.warn(
+							`Token refresh event validation failed: ${validationResult.reason}`,
+						)
 					}
 				}
 				break
 
 			case 'expire':
 				if (this.state.status === 'valid' && 'tokenData' in this.state) {
+					logger.info('Token expire event received')
 					this.transitionToExpired(this.state.tokenData)
 				}
 				break
 
 			case 'error':
 				if (event.error) {
+					logger.warn('Token error event received', { error: event.error })
 					this.transitionToError(event.error)
 				}
 				break
@@ -120,23 +274,48 @@ export class TokenStateMachine implements ITokenManager {
 	}
 
 	/**
-	 * Ensures the token data meets CodeFlowTokenData requirements
+	 * Validates that token data meets requirements and provides detailed feedback
+	 *
+	 * This centralized validation method checks all required token fields and returns
+	 * a structured result with validation details. It's used throughout the class to
+	 * ensure consistent token validation.
+	 *
+	 * @param tokenData The token data to validate
+	 * @returns Validation result with tokenData if valid
 	 */
-	private ensureValidTokenData(tokenData: any): TokenData | null {
-		if (
-			!tokenData ||
-			!tokenData.accessToken ||
-			!tokenData.refreshToken ||
-			!tokenData.expiresAt
-		) {
-			return null
+	private validateTokenData(tokenData: any): ValidateTokenResult {
+		// First check for null/undefined
+		if (!tokenData) {
+			return {
+				valid: false,
+				reason: 'Token data is null or undefined',
+			}
 		}
 
-		return {
+		// Check for required fields
+		const missingFields = []
+		if (!tokenData.accessToken) missingFields.push('accessToken')
+		if (!tokenData.refreshToken) missingFields.push('refreshToken')
+		if (!tokenData.expiresAt) missingFields.push('expiresAt')
+
+		if (missingFields.length > 0) {
+			return {
+				valid: false,
+				reason: `Token data missing required fields: ${missingFields.join(', ')}`,
+			}
+		}
+
+		// All validation passed, return validated token data
+		const validTokenData: TokenData = {
 			accessToken: tokenData.accessToken,
 			refreshToken: tokenData.refreshToken,
 			expiresAt: tokenData.expiresAt,
 			...tokenData,
+		}
+
+		return {
+			valid: true,
+			tokenData: validTokenData,
 		}
 	}
 
@@ -150,30 +329,49 @@ export class TokenStateMachine implements ITokenManager {
 	/**
 	 * Updates the token client
 	 */
-	updateTokenClient(tokenClient: SchwabCodeFlowAuth): void {
+	public updateTokenClient(tokenClient: SchwabCodeFlowAuth): void {
 		logger.info('Updating token client')
 		this.tokenClient = tokenClient
 	}
 
 	/**
 	 * Initialize the token state
+	 *
+	 * This method loads token data and transitions to the appropriate state.
+	 * It uses the consolidated uninitialized state with isInitializing flag.
 	 */
-	async initialize(): Promise<boolean> {
-		if (this.state.status !== 'uninitialized') {
+	public async initialize(): Promise<boolean> {
+		// If already in a valid or refreshing state, don't re-initialize
+		if (
+			this.state.status !== 'uninitialized' &&
+			this.state.status !== 'error'
+		) {
 			return this.state.status === 'valid'
 		}
 
-		this.transitionToInitializing()
+		// If already initializing, don't start a parallel initialization
+		if (this.state.status === 'uninitialized' && this.state.isInitializing) {
+			logger.info('Initialization already in progress')
+			return false
+		}
+
+		// Mark as initializing
+		this.transitionToUninitialized(true)
 
 		try {
 			const tokenData = await this.tokenClient.getTokenData()
-			const validTokenData = this.ensureValidTokenData(tokenData)
+			const validationResult = this.validateTokenData(tokenData)
 
-			if (!validTokenData) {
-				logger.info('No valid token data available')
-				this.transitionToUninitialized()
+			if (!validationResult.valid) {
+				logger.info(
+					`No valid token data available: ${validationResult.reason || 'unknown reason'}`,
+				)
+				this.transitionToUninitialized(false)
 				return false
 			}
+
+			// We know tokenData is valid at this point
+			const validTokenData = validationResult.tokenData!
 
 			if (this.isTokenExpired(validTokenData)) {
 				logger.info('Token is expired, attempting refresh')
@@ -196,7 +394,7 @@ export class TokenStateMachine implements ITokenManager {
 	/**
 	 * Get the current access token, ensuring it's valid first
 	 */
-	async getAccessToken(): Promise<string | null> {
+	public async getAccessToken(): Promise<string | null> {
 		if (this.state.status !== 'valid') {
 			const valid = await this.ensureValidToken()
 			if (!valid) return null
@@ -207,37 +405,201 @@ export class TokenStateMachine implements ITokenManager {
 
 	/**
 	 * Ensure the token is valid, refreshing if necessary
+	 *
+	 * This method is the central validation point that ensures a valid token is available.
+	 * It handles all possible states and takes appropriate action to get to a valid state.
 	 */
-	async ensureValidToken(): Promise<boolean> {
-		if (this.state.status === 'uninitialized') {
-			return await this.initialize()
-		}
+	public async ensureValidToken(): Promise<boolean> {
+		// Handle all possible states explicitly
+		switch (this.state.status) {
+			case 'uninitialized':
+				// If initialization is already in progress, we should wait
+				if (this.state.isInitializing) {
+					logger.info('Token initialization in progress, waiting')
+					return false
+				}
+				return await this.initialize()
 
-		if (this.state.status === 'valid') {
-			// Double-check expiration even in 'valid' state
-			if (
-				'tokenData' in this.state &&
-				this.isTokenExpired(this.state.tokenData)
-			) {
-				logger.info('Token is expired despite valid state, refreshing')
-				this.transitionToExpired(this.state.tokenData)
+			case 'valid':
+				// Double-check token expiration
+				if (
+					'tokenData' in this.state &&
+					this.isTokenExpired(this.state.tokenData)
+				) {
+					logger.info('Token is expired despite valid state, refreshing')
+					this.transitionToExpired(this.state.tokenData)
+					return await this.refresh()
+				}
+				return true
+
+			case 'expired':
+				// Refresh the token
+				logger.info('Token is expired, refreshing')
 				return await this.refresh()
+
+			case 'error':
+				// Attempt recovery through initialization
+				logger.warn(
+					'Token in error state, attempting recovery via initialization',
+				)
+				return await this.initialize()
+
+			case 'refreshing':
+				// Already in progress
+				logger.info('Token refresh already in progress, waiting')
+				return false
+
+			default: {
+				// This should never happen if all state types are properly handled
+				// For TypeScript exhaustiveness checking, use a type assertion
+				const unknownState = this.state as { status: string }
+				logger.error(`Unhandled token state: ${unknownState.status}`)
+				return false
 			}
-			return true
 		}
+	}
 
-		if (this.state.status === 'expired') {
-			return await this.refresh()
+	/**
+	 * Maximum number of refresh retries
+	 */
+	private readonly MAX_REFRESH_RETRIES = 3
+
+	/**
+	 * Internal refresh retry counter
+	 */
+	private refreshRetryCount = 0
+
+	/**
+	 * Performs the actual token refresh using whatever mechanism is available
+	 *
+	 * This method abstracts the underlying refresh mechanism and provides
+	 * a centralized way to refresh tokens regardless of the client implementation.
+	 */
+	private async performTokenRefresh(): Promise<TokenRefreshResult> {
+		logger.info('Performing token refresh')
+
+		// Emit refresh attempt event at start
+		this.emitStateEvent({
+			type: 'refresh-attempt',
+			timestamp: Date.now(),
+			newState: this.state.status, // Current state
+			metadata: {
+				attempt: this.refreshRetryCount + 1,
+				maxAttempts: this.MAX_REFRESH_RETRIES,
+			},
+		})
+
+		try {
+			// If the client has a forceRefresh method, use it first as it's typically more reliable
+			if (typeof this.tokenClient.forceRefresh === 'function') {
+				logger.info('Using forceRefresh method for token refresh')
+
+				const result = await this.tokenClient.forceRefresh({
+					logDetails: true,
+				})
+
+				// Emit event with result
+				this.emitStateEvent({
+					type: 'refresh-attempt',
+					timestamp: Date.now(),
+					success: result.success,
+					error: result.error || undefined,
+					metadata: {
+						method: 'forceRefresh',
+						attempt: this.refreshRetryCount + 1,
+						maxAttempts: this.MAX_REFRESH_RETRIES,
+						hasTokenData: !!result.tokenData,
+					},
+				})
+
+				return result
+			}
+
+			// Fall back to other methods if forceRefresh is not available
+			logger.info(
+				'forceRefresh not available, attempting to refresh via more primitive methods',
+			)
+
+			// If we have tokenData with a refresh token, we can try to construct our own refresh
+			if (
+				this.state.status === 'refreshing' &&
+				'tokenData' in this.state &&
+				this.state.tokenData.refreshToken
+			) {
+				// We'll use the basic client methods to try to maintain backward compatibility
+				// in case the client's implementation changes
+
+				// This would be where we'd implement a more primitive refresh mechanism
+				// using the client's basic methods if needed
+
+				// Since forceRefresh is the only implemented mechanism, throw a specific error
+				const error = new Error('SchwabCodeFlowAuth client does not support forceRefresh.');
+				
+				const result = {
+					success: false,
+					error,
+				}
+
+				// Emit event with result
+				this.emitStateEvent({
+					type: 'refresh-attempt',
+					timestamp: Date.now(),
+					success: false,
+					error: result.error,
+					metadata: {
+						method: 'alternative',
+						attempt: this.refreshRetryCount + 1,
+						maxAttempts: this.MAX_REFRESH_RETRIES,
+					},
+				})
+
+				return result
+			}
+
+			const result = {
+				success: false,
+				error: new Error(
+					'Cannot refresh - no valid refresh mechanism available',
+				),
+			}
+
+			// Emit event with result
+			this.emitStateEvent({
+				type: 'refresh-attempt',
+				timestamp: Date.now(),
+				success: false,
+				error: result.error,
+				metadata: {
+					method: 'none',
+					attempt: this.refreshRetryCount + 1,
+					maxAttempts: this.MAX_REFRESH_RETRIES,
+				},
+			})
+
+			return result
+		} catch (error) {
+			logger.error('Error during token refresh operation', { error })
+
+			const result = {
+				success: false,
+				error: error instanceof Error ? error : new Error(String(error)),
+			}
+
+			// Emit event with result
+			this.emitStateEvent({
+				type: 'refresh-attempt',
+				timestamp: Date.now(),
+				success: false,
+				error: result.error,
+				metadata: {
+					error: true,
+					attempt: this.refreshRetryCount + 1,
+					maxAttempts: this.MAX_REFRESH_RETRIES,
+				},
+			})
+
+			return result
 		}
-
-		if (this.state.status === 'error') {
-			logger.warn('Token in error state, attempting recovery')
-			return await this.initialize()
-		}
-
-		// For initializing or refreshing states
-		logger.info(`Waiting for token state to resolve: ${this.state.status}`)
-		return false
 	}
 
 	/**
@@ -247,7 +609,7 @@ export class TokenStateMachine implements ITokenManager {
 	 * All token refresh operations should go through this method to ensure
 	 * consistent state management and proper handling of the refresh flow.
 	 */
-	async refresh(): Promise<boolean> {
+	public async refresh(): Promise<boolean> {
 		// Only allow refresh from valid or expired states to maintain consistency
 		if (this.state.status !== 'expired' && this.state.status !== 'valid') {
 			logger.warn('Cannot refresh from current state', {
@@ -264,35 +626,211 @@ export class TokenStateMachine implements ITokenManager {
 		const currentTokenData = this.state.tokenData
 		this.transitionToRefreshing(currentTokenData)
 
+		// Reset retry counter for new refresh attempts
+		this.refreshRetryCount = 0
+
+		return await this.executeRefreshWithRetry()
+	}
+
+	/**
+	 * Execute a token refresh with automatic retry logic
+	 *
+	 * This handles the retry logic separately from the main refresh flow,
+	 * making the code more maintainable and easier to understand.
+	 */
+	private async executeRefreshWithRetry(): Promise<boolean> {
 		try {
-			// Use forceRefresh from the client which is more reliable than the regular refresh method
-			// This is the only place where token refresh should be initiated
-			const result: TokenRefreshResult = await this.tokenClient.forceRefresh({
-				retryOnFailure: true,
-				logDetails: true,
-			})
+			// Perform the actual token refresh
+			const result = await this.performTokenRefresh()
 
 			if (result.success && result.tokenData) {
-				const validTokenData = this.ensureValidTokenData(result.tokenData)
-				if (validTokenData) {
-					this.transitionToValid(validTokenData)
+				const validationResult = this.validateTokenData(result.tokenData)
+
+				if (validationResult.valid && validationResult.tokenData) {
+					this.transitionToValid(validationResult.tokenData)
+					// Reset retry counter on success
+					this.refreshRetryCount = 0
 					return true
 				} else {
-					this.transitionToError(
-						new Error('Invalid token data received during refresh'),
-					)
+					const errorMessage =
+						validationResult.reason ||
+						'Invalid token data received during refresh'
+					logger.error(errorMessage)
+					this.transitionToError(new Error(errorMessage))
 					return false
 				}
 			}
 
-			this.transitionToError(result.error || new Error('Token refresh failed'))
+			// Check if we should retry
+			if (this.refreshRetryCount < this.MAX_REFRESH_RETRIES) {
+				this.refreshRetryCount++
+
+				// Calculate backoff time (exponential backoff)
+				const backoffMs = Math.pow(1.5, this.refreshRetryCount) * 1000
+
+				logger.info(
+					`Refresh attempt failed, retrying in ${backoffMs}ms (attempt ${this.refreshRetryCount} of ${this.MAX_REFRESH_RETRIES})`,
+				)
+
+				// Wait for backoff time
+				await new Promise((resolve) => setTimeout(resolve, backoffMs))
+
+				// Retry the refresh
+				return await this.executeRefreshWithRetry()
+			}
+
+			// If we've exhausted retries, transition to error state
+			this.transitionToError(
+				result.error || new Error('Token refresh failed after retries'),
+			)
 			return false
 		} catch (error) {
-			logger.error('Error during token refresh', { error })
+			logger.error('Error during token refresh execution', { error })
 			this.transitionToError(
 				error instanceof Error ? error : new Error(String(error)),
 			)
 			return false
+		}
+	}
+
+	/**
+	 * Maximum number of reconnection retries
+	 */
+	private readonly MAX_RECONNECT_RETRIES = 3
+
+	/**
+	 * Internal reconnection retry counter
+	 */
+	private reconnectRetryCount = 0
+
+	/**
+	 * Minimum time between reconnection attempts in milliseconds (5 seconds)
+	 */
+	private readonly MIN_RECONNECT_INTERVAL_MS = 5000
+
+	/**
+	 * Performs the actual reconnection using multiple strategies
+	 *
+	 * This method attempts reconnection using various approaches, starting with
+	 * the highest-level approaches and falling back to more basic methods if needed.
+	 * The order of operations is:
+	 *
+	 * 1. Try using the client's handleReconnection method if available
+	 * 2. If that fails, try to get the token data and validate it
+	 * 3. If the token is expired, try to refresh it
+	 * 4. If all else fails, try to initialize from scratch
+	 */
+	private async performReconnection(): Promise<ReconnectionResult> {
+		logger.info('Attempting reconnection')
+
+		// Emit reconnection attempt event
+		this.emitStateEvent({
+			type: 'reconnect-attempt',
+			timestamp: Date.now(),
+			newState: this.state.status,
+			metadata: {
+				attempt: this.reconnectRetryCount + 1,
+				maxAttempts: this.MAX_RECONNECT_RETRIES,
+			},
+		})
+
+		try {
+			// Strategy 1: Use client's handleReconnection if available
+			if (typeof this.tokenClient.handleReconnection === 'function') {
+				logger.info('Using client-provided reconnection method')
+				const clientResult = await this.tokenClient.handleReconnection({
+					forceTokenRefresh: false, // We will handle refresh ourselves if needed
+					validateTokens: true,
+				})
+
+				if (clientResult.success) {
+					logger.info('Client reconnection succeeded')
+
+					// Emit success event
+					this.emitStateEvent({
+						type: 'reconnect-attempt',
+						timestamp: Date.now(),
+						success: true,
+						metadata: {
+							method: 'client',
+							attempt: this.reconnectRetryCount + 1,
+							maxAttempts: this.MAX_RECONNECT_RETRIES,
+							tokenRestored: clientResult.tokenRestored,
+							refreshPerformed: clientResult.refreshPerformed,
+						},
+					})
+
+					return clientResult
+				}
+
+				// Emit failure event
+				this.emitStateEvent({
+					type: 'reconnect-attempt',
+					timestamp: Date.now(),
+					success: false,
+					error: clientResult.error || undefined,
+					metadata: {
+						method: 'client',
+						attempt: this.reconnectRetryCount + 1,
+						maxAttempts: this.MAX_RECONNECT_RETRIES,
+						fallbackAvailable: true,
+					},
+				})
+
+				logger.warn('Client reconnection failed, trying alternative strategies')
+			}
+
+			// Strategy 2: Manual reconnection by getting current token data and validating
+			logger.info('Attempting manual reconnection')
+
+			// Get current token data
+			const tokenData = await this.tokenClient.getTokenData()
+
+			// Validate the token data with more detailed feedback
+			const validationResult = this.validateTokenData(tokenData)
+
+			if (!validationResult.valid) {
+				const errorMsg =
+					validationResult.reason || 'Invalid token data during reconnection'
+				logger.error(errorMsg)
+
+				return {
+					success: false,
+					tokenRestored: false,
+					refreshPerformed: false,
+					error: new Error(errorMsg),
+				}
+			}
+
+			// Use the validated token data
+			const validTokenData = validationResult.tokenData!
+
+			// Token restored but may be expired
+			const tokenRestored = true
+			let refreshPerformed = false
+
+			// If token is expired, don't refresh here - we'll do it after returning
+			// Just indicate whether it's expired so the caller knows
+			const isExpired = this.isTokenExpired(validTokenData)
+
+			return {
+				success: true,
+				tokenRestored,
+				refreshPerformed,
+				// Include token expiry information to help the caller
+				// decide how to handle the situation
+				isExpired,
+				// Include the validated token data to avoid additional API call
+				tokenData: validTokenData as CodeFlowTokenData,
+			} as ReconnectionResult & { isExpired?: boolean }
+		} catch (error) {
+			logger.error('Error during reconnection attempt', { error })
+			return {
+				success: false,
+				tokenRestored: false,
+				refreshPerformed: false,
+				error: error instanceof Error ? error : new Error(String(error)),
+			}
 		}
 	}
 
@@ -301,11 +839,14 @@ export class TokenStateMachine implements ITokenManager {
 	 *
 	 * Centralizes reconnection logic and properly manages the token state
 	 * transition during reconnection events.
+	 *
+	 * This method coordinates the entire reconnection process including
+	 * state management, retry logic, and token refresh if needed.
 	 */
-	async handleReconnection(): Promise<boolean> {
+	public async handleReconnection(): Promise<boolean> {
 		// Avoid reconnecting too frequently
 		const now = Date.now()
-		if (now - this.lastReconnectTime < 5000) {
+		if (now - this.lastReconnectTime < this.MIN_RECONNECT_INTERVAL_MS) {
 			logger.info('Skipping reconnection, too soon after last attempt')
 			return false
 		}
@@ -313,46 +854,101 @@ export class TokenStateMachine implements ITokenManager {
 		this.lastReconnectTime = now
 		logger.info('Handling reconnection')
 
-		try {
-			// Use client's handleReconnection but manage state ourselves
-			const result = await this.tokenClient.handleReconnection({
-				forceTokenRefresh: true,
-				validateTokens: true,
-			})
+		// Reset retry counter for new reconnection attempts
+		this.reconnectRetryCount = 0
 
-			// Update state based on reconnection result
-			if (result.success) {
-				const tokenData = await this.tokenClient.getTokenData()
-				const validTokenData = this.ensureValidTokenData(tokenData)
-				if (validTokenData) {
-					// Update state based on token expiration
-					if (this.isTokenExpired(validTokenData)) {
-						this.transitionToExpired(validTokenData)
-						// If token is expired, attempt to refresh it immediately
-						logger.info(
-							'Token is expired after reconnection, attempting refresh',
-						)
-						await this.refresh() // Handle the refresh flow through our centralized method
-					} else {
-						this.transitionToValid(validTokenData)
-					}
-				}
+		// Try reconnection with retries
+		for (let attempt = 0; attempt <= this.MAX_RECONNECT_RETRIES; attempt++) {
+			if (attempt > 0) {
+				// Calculate backoff time for retries (exponential backoff)
+				const backoffMs = Math.pow(1.5, attempt) * 1000
+				logger.info(
+					`Reconnection attempt ${attempt} failed, retrying in ${backoffMs}ms`,
+				)
+
+				// Wait before retrying
+				await new Promise((resolve) => setTimeout(resolve, backoffMs))
 			}
 
-			return result.success
-		} catch (error) {
-			logger.error('Reconnection error', { error })
-			this.transitionToError(
-				error instanceof Error ? error : new Error(String(error)),
-			)
-			return false
+			try {
+				// Attempt reconnection
+				const result = await this.performReconnection()
+
+				// If reconnection successful
+				if (result.success) {
+					let validTokenData;
+					
+					// Check if reconnection result already includes valid token data
+					if (result.tokenData) {
+						// Use the token data from the reconnection result
+						logger.info('Using token data from reconnection result')
+						validTokenData = result.tokenData as CodeFlowTokenData;
+					} else {
+						// Fallback: Get token data if not included in the result
+						logger.info('Token data not in reconnection result, fetching from client')
+						const tokenData = await this.tokenClient.getTokenData()
+						if (!tokenData) {
+							logger.warn('Reconnection succeeded but no token data available')
+							continue // Try again
+						}
+						
+						const validationResult = this.validateTokenData(tokenData)
+						if (!validationResult.valid) {
+							logger.warn(
+								`Reconnection succeeded but token data is invalid: ${validationResult.reason || 'unknown reason'}`,
+							)
+							continue // Try again
+						}
+						
+						validTokenData = validationResult.tokenData!
+					}
+
+					// Determine if token is expired
+					const isExpired =
+						'isExpired' in result
+							? result.isExpired
+							: this.isTokenExpired(validTokenData)
+
+					// Update state based on token expiration
+					if (isExpired) {
+						logger.info('Token is expired after reconnection')
+						this.transitionToExpired(validTokenData)
+
+						// Attempt to refresh the token
+						logger.info(
+							'Attempting to refresh expired token after reconnection',
+						)
+						const refreshSuccess = await this.refresh()
+
+						// Return overall reconnection success
+						return refreshSuccess
+					} else {
+						// Token is valid, update state
+						logger.info('Token is valid after reconnection')
+						this.transitionToValid(validTokenData)
+						return true
+					}
+				}
+			} catch (error) {
+				logger.error(`Reconnection attempt ${attempt + 1} failed with error`, {
+					error,
+				})
+				// Continue with retry
+			}
 		}
+
+		// If we've exhausted all retries
+		logger.error('Reconnection failed after maximum retries')
+		this.transitionToError(
+			new Error('Reconnection failed after maximum retries'),
+		)
+		return false
 	}
 
 	/**
 	 * Get diagnostic information about the current token state
 	 */
-	getDiagnostics() {
+	public getDiagnostics() {
 		return {
 			state: this.state.status,
 			hasAccessToken:
