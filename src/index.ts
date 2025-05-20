@@ -107,8 +107,8 @@ export class MyMCP extends DurableMCP<Props, Env> {
 				logger.info('Using TokenStateMachine for token management')
 				this.centralTokenManager = new TokenStateMachine(this.tokenManager)
 
-				// Initialize both token managers with the same instance
-				logger.info('Initializing token managers')
+				// Single point of initialization for all token managers
+				logger.info('Initializing token managers in a single location')
 				initializeUtilTokenManager(this.centralTokenManager)
 				initializeToolTokenManager(this.centralTokenManager)
 
@@ -214,10 +214,9 @@ export class MyMCP extends DurableMCP<Props, Env> {
 				)
 			}
 
-			// Ensure token managers are initialized when reconnecting
-			if (this.centralTokenManager) {
-				initializeUtilTokenManager(this.centralTokenManager)
-				initializeToolTokenManager(this.centralTokenManager)
+			// Token managers are already initialized during construction
+			if (!this.centralTokenManager) {
+				logger.warn('Token manager not found during initialization')
 			}
 
 			// Register all tools and track them
@@ -246,11 +245,7 @@ export class MyMCP extends DurableMCP<Props, Env> {
 		logger.info('Handling reconnection')
 
 		try {
-			// Ensure token managers are initialized
-			if (this.centralTokenManager) {
-				initializeUtilTokenManager(this.centralTokenManager)
-				initializeToolTokenManager(this.centralTokenManager)
-			}
+			// Token managers should already be initialized in init()
 
 			// Use the dedicated reconnection handler from our centralized token manager
 			if (this.centralTokenManager?.handleReconnection) {

@@ -1,7 +1,6 @@
 import { type SchwabApiClient } from '@sudowealth/schwab-api'
 import { type ITokenManager } from '../auth/tokenInterface'
 import { logger } from './logger'
-import { initializeTokenManager as initToolBuilderTokenManager } from './toolBuilder'
 
 // Re-export from toolBuilder to maintain backwards compatibility
 export { mergeShapes, createTool, toolError, toolSuccess } from './toolBuilder'
@@ -11,14 +10,10 @@ let tokenManagerInstance: ITokenManager | null = null
 
 /**
  * Initialize the token manager reference
- * This function initializes both this module's token manager and the one in toolBuilder
  */
 export function initializeTokenManager(manager: ITokenManager) {
 	logger.info('Initializing token manager in utils')
 	tokenManagerInstance = manager
-
-	// Also initialize the token manager in toolBuilder
-	initToolBuilderTokenManager(manager)
 }
 
 /**
