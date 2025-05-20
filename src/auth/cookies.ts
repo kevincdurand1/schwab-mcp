@@ -25,6 +25,27 @@ function fromHex(hexString: string): ArrayBuffer {
 }
 
 /**
+ * Decodes a base64 string to Uint8Array.
+ * @param base64Payload - The base64 encoded string.
+ * @returns Uint8Array containing the decoded data.
+ */
+function decodeBase64Payload(base64Payload: string): Uint8Array {
+	try {
+		// First convert base64 to string representation of binary data
+		const binaryString = atob(base64Payload)
+		// Then convert to actual Uint8Array
+		const decodedBytes = new Uint8Array(binaryString.length)
+		for (let i = 0; i < binaryString.length; i++) {
+			decodedBytes[i] = binaryString.charCodeAt(i)
+		}
+		return decodedBytes
+	} catch (e) {
+		console.warn('Invalid base64 payload:', e)
+		throw new Error('Failed to decode base64 payload')
+	}
+}
+
+/**
  * Decodes a URL-safe base64 string back to its original data.
  * Safely handles base64 decoding before attempting to parse JSON.
  *
@@ -33,19 +54,13 @@ function fromHex(hexString: string): ArrayBuffer {
  */
 function decodeState<T = any>(encoded: string): T {
 	try {
-		// Step 1: Safe base64 decode to binary string
-		const binaryString = atob(encoded)
+		// Step 1: Decode base64 to Uint8Array
+		const bytes = decodeBase64Payload(encoded)
 
-		// Step 2: Convert to Uint8Array for safer handling
-		const bytes = new Uint8Array(binaryString.length)
-		for (let i = 0; i < binaryString.length; i++) {
-			bytes[i] = binaryString.charCodeAt(i)
-		}
-
-		// Step 3: Convert back to string for JSON parsing
+		// Step 2: Convert to string for JSON parsing
 		const jsonString = new TextDecoder().decode(bytes)
 
-		// Step 4: Parse JSON
+		// Step 3: Parse JSON
 		return JSON.parse(jsonString) as T
 	} catch (e) {
 		console.error('Error decoding state:', e)
@@ -147,13 +162,7 @@ async function getApprovedClientsFromCookie(
 	// Step 1: Safe base64 decode to Uint8Array (no JSON.parse yet)
 	let decodedBytes: Uint8Array
 	try {
-		// First convert base64 to string representation of binary data
-		const binaryString = atob(base64Payload as string)
-		// Then convert to actual Uint8Array
-		decodedBytes = new Uint8Array(binaryString.length)
-		for (let i = 0; i < binaryString.length; i++) {
-			decodedBytes[i] = binaryString.charCodeAt(i)
-		}
+		decodedBytes = decodeBase64Payload(base64Payload as string)
 	} catch (e) {
 		console.warn('Invalid base64 payload in cookie:', e)
 		return undefined

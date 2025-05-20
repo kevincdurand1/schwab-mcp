@@ -106,8 +106,14 @@ export function initializeSchwabAuthClient(
 	load?: () => Promise<CodeFlowTokenData | null>,
 	save?: (tokenData: CodeFlowTokenData) => Promise<void>,
 ): SchwabCodeFlowAuth {
-	// Ensure EnvConfig is initialized with the provided env
+	// EnvConfig should already be initialized and validated at app startup
+	// We don't need to reinitialize, but we'll ensure it's available
 	if (!EnvConfig.isInitialized()) {
+		// This is a fallback for cases where initialization hasn't happened yet
+		// It should be rare and ideally never happen in production
+		logger.warn(
+			'EnvConfig not initialized. Initializing now, but this should happen at app startup.',
+		)
 		EnvConfig.initialize(env)
 	}
 
@@ -180,6 +186,7 @@ export async function redirectToSchwab(
 	headers: HeadersInit = {},
 ): Promise<Response> {
 	try {
+		// Environment should already be validated during app initialization
 		const redirectUri = new URL('/callback', c.req.raw.url).href
 		const auth = initializeSchwabAuthClient(c.env, redirectUri)
 

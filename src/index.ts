@@ -10,6 +10,7 @@ import {
 } from './auth/client'
 import { type ITokenManager } from './auth/tokenInterface'
 import { TokenStateMachine } from './auth/tokenStateMachine'
+import { EnvConfig } from './config/envConfig'
 import { logger } from './shared/logger'
 import { initializeTokenManager as initializeToolTokenManager } from './shared/toolBuilder'
 import { initializeTokenManager as initializeUtilTokenManager } from './shared/utils'
@@ -46,6 +47,16 @@ export class MyMCP extends DurableMCP<Props, Env> {
 	async init() {
 		try {
 			logger.info('Initializing Schwab MCP server')
+
+			// Initialize and validate environment configuration first
+			logger.info('Initializing environment configuration')
+			EnvConfig.initialize(this.env)
+
+			// Validate all required environment variables at once
+			// This will throw an error if any required variable is missing
+			logger.info('Validating environment configuration')
+			EnvConfig.validateEnvironment(true)
+			logger.info('Environment validation successful')
 
 			const redirectUri = 'https://schwab-mcp.dyeoman2.workers.dev/callback'
 

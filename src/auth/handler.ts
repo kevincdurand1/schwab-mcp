@@ -28,10 +28,8 @@ const app = new Hono<{ Bindings: Env & { OAUTH_PROVIDER: OAuthHelpers } }>()
  */
 app.get('/authorize', async (c) => {
 	try {
-		// Ensure EnvConfig is initialized
-		if (!EnvConfig.isInitialized()) {
-			EnvConfig.initialize(c.env)
-		}
+		// Environment config is initialized at startup
+		// No need to initialize here
 
 		const oauthReqInfo = await c.env.OAUTH_PROVIDER.parseAuthRequest(c.req.raw)
 		const { clientId } = oauthReqInfo
@@ -78,10 +76,8 @@ app.get('/authorize', async (c) => {
  */
 app.post('/authorize', async (c) => {
 	try {
-		// Ensure EnvConfig is initialized
-		if (!EnvConfig.isInitialized()) {
-			EnvConfig.initialize(c.env)
-		}
+		// Environment config is initialized at startup
+		// No need to initialize here
 
 		const { state, headers } = await parseRedirectApproval(
 			c.req.raw,

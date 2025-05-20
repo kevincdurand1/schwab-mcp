@@ -18,13 +18,17 @@ export class EnvConfig {
 	 * Initializes the environment configuration with the provided Env object
 	 *
 	 * @param env Environment variables
+	 * @returns True if successful, false if already initialized
 	 */
-	public static initialize(env: Env): void {
+	public static initialize(env: Env): boolean {
 		if (!EnvConfig.instance) {
 			EnvConfig.instance = new EnvConfig()
+			EnvConfig.instance.env = env
+			logger.info('Environment configuration initialized')
+			return true
 		}
-		EnvConfig.instance.env = env
-		logger.info('Environment configuration initialized')
+		// Already initialized, this is a no-op
+		return false
 	}
 
 	/**
@@ -104,6 +108,73 @@ export class EnvConfig {
 	 */
 	public static isInitialized(): boolean {
 		return !!EnvConfig.instance && !!EnvConfig.instance.env
+	}
+
+	/**
+	 * Validates all required environment variables at once
+	 *
+	 * @returns Validation result with any missing variables
+	 * @throws Error if any required variable is missing and throwOnMissing is true
+	 */
+	public static validateEnvironment(throwOnMissing: boolean = true): {
+		valid: boolean
+		missingVars: string[]
+	} {
+		if (!this.isInitialized()) {
+			if (throwOnMissing) {
+				throw new Error(
+					'EnvConfig not initialized. Call EnvConfig.initialize(env) first.',
+				)
+			}
+			return { valid: false, missingVars: ['EnvConfig not initialized'] }
+		}
+
+		// Required variables to check
+		const requiredVars = [
+			{
+				name: 'SCHWAB_CLIENT_ID',
+				accessor: () => this.getInstance().env!.SCHWAB_CLIENT_ID,
+			},
+			{
+				name: 'SCHWAB_CLIENT_SECRET',
+				accessor: () => this.getInstance().env!.SCHWAB_CLIENT_SECRET,
+			},
+			{
+				name: 'COOKIE_ENCRYPTION_KEY',
+				accessor: () => this.getInstance().env!.COOKIE_ENCRYPTION_KEY,
+			},
+		]
+
+		const missingVars: string[] = []
+
+		// Check each required variable without calling the getters
+		// to avoid excessive error logging
+		for (const v of requiredVars) {
+			try {
+				const value = v.accessor()
+				if (!value) {
+					missingVars.push(v.name)
+				}
+			} catch (e) {
+				missingVars.push(v.name)
+				logger.error(`Missing required environment variable: ${v.name}, ${e}`)
+			}
+		}
+
+		// If any required variables are missing, log them all at once
+		if (missingVars.length > 0) {
+			const errorMessage = `Missing required environment variables: ${missingVars.join(', ')}`
+			logger.error(errorMessage)
+
+			if (throwOnMissing) {
+				throw new Error(errorMessage)
+			}
+		}
+
+		return {
+			valid: missingVars.length === 0,
+			missingVars,
+		}
 	}
 
 	/**

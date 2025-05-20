@@ -34,6 +34,39 @@ export class TokenStateMachine implements ITokenManager {
 	private tokenClient: SchwabCodeFlowAuth
 	private lastReconnectTime = 0
 
+	/**
+	 * Internal methods for state transitions to ensure consistent state updates
+	 */
+	private transitionToUninitialized(): void {
+		this.state = { status: 'uninitialized' }
+		logger.info('Token state: uninitialized')
+	}
+
+	private transitionToInitializing(): void {
+		this.state = { status: 'initializing' }
+		logger.info('Token state: initializing')
+	}
+
+	private transitionToValid(tokenData: TokenData): void {
+		this.state = { status: 'valid', tokenData }
+		logger.info('Token state: valid')
+	}
+
+	private transitionToExpired(tokenData: TokenData): void {
+		this.state = { status: 'expired', tokenData }
+		logger.info('Token state: expired')
+	}
+
+	private transitionToRefreshing(tokenData: TokenData): void {
+		this.state = { status: 'refreshing', tokenData }
+		logger.info('Token state: refreshing')
+	}
+
+	private transitionToError(error: Error): void {
+		this.state = { status: 'error', error }
+		logger.error('Token state: error', { error })
+	}
+
 	constructor(tokenClient: SchwabCodeFlowAuth) {
 		this.tokenClient = tokenClient
 
@@ -54,9 +87,10 @@ export class TokenStateMachine implements ITokenManager {
 				if (event.tokenData) {
 					const validTokenData = this.ensureValidTokenData(event.tokenData)
 					if (validTokenData) {
-						this.state = {
-							status: this.isTokenExpired(validTokenData) ? 'expired' : 'valid',
-							tokenData: validTokenData,
+						if (this.isTokenExpired(validTokenData)) {
+							this.transitionToExpired(validTokenData)
+						} else {
+							this.transitionToValid(validTokenData)
 						}
 					}
 				}
@@ -66,29 +100,20 @@ export class TokenStateMachine implements ITokenManager {
 				if (event.tokenData) {
 					const validTokenData = this.ensureValidTokenData(event.tokenData)
 					if (validTokenData) {
-						this.state = {
-							status: 'valid',
-							tokenData: validTokenData,
-						}
+						this.transitionToValid(validTokenData)
 					}
 				}
 				break
 
 			case 'expire':
 				if (this.state.status === 'valid' && 'tokenData' in this.state) {
-					this.state = {
-						status: 'expired',
-						tokenData: this.state.tokenData,
-					}
+					this.transitionToExpired(this.state.tokenData)
 				}
 				break
 
 			case 'error':
 				if (event.error) {
-					this.state = {
-						status: 'error',
-						error: event.error,
-					}
+					this.transitionToError(event.error)
 				}
 				break
 		}
@@ -138,7 +163,7 @@ export class TokenStateMachine implements ITokenManager {
 			return this.state.status === 'valid'
 		}
 
-		this.state = { status: 'initializing' }
+		this.transitionToInitializing()
 
 		try {
 			const tokenData = await this.tokenClient.getTokenData()
@@ -146,25 +171,24 @@ export class TokenStateMachine implements ITokenManager {
 
 			if (!validTokenData) {
 				logger.info('No valid token data available')
-				this.state = { status: 'uninitialized' }
+				this.transitionToUninitialized()
 				return false
 			}
 
 			if (this.isTokenExpired(validTokenData)) {
 				logger.info('Token is expired, attempting refresh')
-				this.state = { status: 'expired', tokenData: validTokenData }
+				this.transitionToExpired(validTokenData)
 				return await this.refresh()
 			}
 
 			logger.info('Token is valid')
-			this.state = { status: 'valid', tokenData: validTokenData }
+			this.transitionToValid(validTokenData)
 			return true
 		} catch (error) {
 			logger.error('Error initializing token state', { error })
-			this.state = {
-				status: 'error',
-				error: error instanceof Error ? error : new Error(String(error)),
-			}
+			this.transitionToError(
+				error instanceof Error ? error : new Error(String(error)),
+			)
 			return false
 		}
 	}
@@ -196,7 +220,7 @@ export class TokenStateMachine implements ITokenManager {
 				this.isTokenExpired(this.state.tokenData)
 			) {
 				logger.info('Token is expired despite valid state, refreshing')
-				this.state = { status: 'expired', tokenData: this.state.tokenData }
+				this.transitionToExpired(this.state.tokenData)
 				return await this.refresh()
 			}
 			return true
@@ -238,7 +262,7 @@ export class TokenStateMachine implements ITokenManager {
 
 		// Track the current token data and update state to refreshing
 		const currentTokenData = this.state.tokenData
-		this.state = { status: 'refreshing', tokenData: currentTokenData }
+		this.transitionToRefreshing(currentTokenData)
 
 		try {
 			// Use forceRefresh from the client which is more reliable than the regular refresh method
@@ -251,28 +275,23 @@ export class TokenStateMachine implements ITokenManager {
 			if (result.success && result.tokenData) {
 				const validTokenData = this.ensureValidTokenData(result.tokenData)
 				if (validTokenData) {
-					this.state = { status: 'valid', tokenData: validTokenData }
+					this.transitionToValid(validTokenData)
 					return true
 				} else {
-					this.state = {
-						status: 'error',
-						error: new Error('Invalid token data received during refresh'),
-					}
+					this.transitionToError(
+						new Error('Invalid token data received during refresh'),
+					)
 					return false
 				}
 			}
 
-			this.state = {
-				status: 'error',
-				error: result.error || new Error('Token refresh failed'),
-			}
+			this.transitionToError(result.error || new Error('Token refresh failed'))
 			return false
 		} catch (error) {
 			logger.error('Error during token refresh', { error })
-			this.state = {
-				status: 'error',
-				error: error instanceof Error ? error : new Error(String(error)),
-			}
+			this.transitionToError(
+				error instanceof Error ? error : new Error(String(error)),
+			)
 			return false
 		}
 	}
@@ -308,14 +327,14 @@ export class TokenStateMachine implements ITokenManager {
 				if (validTokenData) {
 					// Update state based on token expiration
 					if (this.isTokenExpired(validTokenData)) {
-						this.state = { status: 'expired', tokenData: validTokenData }
+						this.transitionToExpired(validTokenData)
 						// If token is expired, attempt to refresh it immediately
 						logger.info(
 							'Token is expired after reconnection, attempting refresh',
 						)
 						await this.refresh() // Handle the refresh flow through our centralized method
 					} else {
-						this.state = { status: 'valid', tokenData: validTokenData }
+						this.transitionToValid(validTokenData)
 					}
 				}
 			}
@@ -323,10 +342,9 @@ export class TokenStateMachine implements ITokenManager {
 			return result.success
 		} catch (error) {
 			logger.error('Reconnection error', { error })
-			this.state = {
-				status: 'error',
-				error: error instanceof Error ? error : new Error(String(error)),
-			}
+			this.transitionToError(
+				error instanceof Error ? error : new Error(String(error)),
+			)
 			return false
 		}
 	}
