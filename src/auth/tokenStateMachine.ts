@@ -23,6 +23,11 @@ type TokenState =
 
 /**
  * Token state machine implementation that centralizes token management logic
+ *
+ * This class is the single source of truth for token state and handles all
+ * aspects of token lifecycle including initialization, validation, refreshing,
+ * and reconnection. All token refresh operations should go through this class
+ * rather than using the tokenClient's refresh methods directly.
  */
 export class TokenStateMachine implements ITokenManager {
 	private state: TokenState = { status: 'uninitialized' }
@@ -213,8 +218,13 @@ export class TokenStateMachine implements ITokenManager {
 
 	/**
 	 * Refresh the token
+	 *
+	 * This is the central method for handling token refresh logic.
+	 * All token refresh operations should go through this method to ensure
+	 * consistent state management and proper handling of the refresh flow.
 	 */
 	async refresh(): Promise<boolean> {
+		// Only allow refresh from valid or expired states to maintain consistency
 		if (this.state.status !== 'expired' && this.state.status !== 'valid') {
 			logger.warn('Cannot refresh from current state', {
 				state: this.state.status,
@@ -226,10 +236,13 @@ export class TokenStateMachine implements ITokenManager {
 			return false
 		}
 
+		// Track the current token data and update state to refreshing
 		const currentTokenData = this.state.tokenData
 		this.state = { status: 'refreshing', tokenData: currentTokenData }
 
 		try {
+			// Use forceRefresh from the client which is more reliable than the regular refresh method
+			// This is the only place where token refresh should be initiated
 			const result: TokenRefreshResult = await this.tokenClient.forceRefresh({
 				retryOnFailure: true,
 				logDetails: true,
@@ -266,6 +279,9 @@ export class TokenStateMachine implements ITokenManager {
 
 	/**
 	 * Handle reconnection scenario
+	 *
+	 * Centralizes reconnection logic and properly manages the token state
+	 * transition during reconnection events.
 	 */
 	async handleReconnection(): Promise<boolean> {
 		// Avoid reconnecting too frequently
@@ -279,6 +295,7 @@ export class TokenStateMachine implements ITokenManager {
 		logger.info('Handling reconnection')
 
 		try {
+			// Use client's handleReconnection but manage state ourselves
 			const result = await this.tokenClient.handleReconnection({
 				forceTokenRefresh: true,
 				validateTokens: true,
@@ -289,9 +306,16 @@ export class TokenStateMachine implements ITokenManager {
 				const tokenData = await this.tokenClient.getTokenData()
 				const validTokenData = this.ensureValidTokenData(tokenData)
 				if (validTokenData) {
-					this.state = {
-						status: this.isTokenExpired(validTokenData) ? 'expired' : 'valid',
-						tokenData: validTokenData,
+					// Update state based on token expiration
+					if (this.isTokenExpired(validTokenData)) {
+						this.state = { status: 'expired', tokenData: validTokenData }
+						// If token is expired, attempt to refresh it immediately
+						logger.info(
+							'Token is expired after reconnection, attempting refresh',
+						)
+						await this.refresh() // Handle the refresh flow through our centralized method
+					} else {
+						this.state = { status: 'valid', tokenData: validTokenData }
 					}
 				}
 			}

@@ -76,7 +76,6 @@ export interface SchwabCodeFlowAuth {
 	getAccessToken(): Promise<string | null>
 	getTokenData(): Promise<TokenData | null>
 	supportsRefresh(): boolean
-	refresh(refreshToken?: string, options?: { force?: boolean }): Promise<any>
 
 	// Enhanced token management features
 	onTokenEvent(callback: (event: TokenLifecycleEvent) => void): void
