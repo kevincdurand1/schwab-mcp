@@ -1,5 +1,6 @@
 import {
 	type OAuthHelpers,
+	type AuthRequest,
 } from '@cloudflare/workers-oauth-provider'
 import { createApiClient } from '@sudowealth/schwab-api'
 import { Hono } from 'hono'
@@ -90,23 +91,22 @@ app.post('/authorize', async (c) => {
 			return c.text('Invalid request', errorInfo.status)
 		}
 
-		// The state.oauthReqInfo comes from our cookies handling,
-		// which is now properly typed as AuthRequest
-		const oauthReqInfo = state.oauthReqInfo
+		// Pass the actual AuthRequest object to redirectToSchwab
+		const authRequestForSchwab = state.oauthReqInfo
 
 		// Validate required AuthRequest fields before passing to redirectToSchwab
-		if (!oauthReqInfo?.clientId || !oauthReqInfo?.scope) {
+		if (!authRequestForSchwab?.clientId || !authRequestForSchwab?.scope) {
 			const errorInfo = formatAuthError(AuthError.INVALID_STATE)
 			logger.error(errorInfo.message, {
 				missingFields: {
-					clientId: !oauthReqInfo?.clientId,
-					scope: !oauthReqInfo?.scope,
+					clientId: !authRequestForSchwab?.clientId,
+					scope: !authRequestForSchwab?.scope,
 				},
 			})
 			return c.text('Invalid state information', errorInfo.status)
 		}
 
-		return redirectToSchwab(c, oauthReqInfo, headers)
+		return redirectToSchwab(c, authRequestForSchwab, headers)
 	} catch (error) {
 		const errorInfo = formatAuthError(AuthError.AUTH_APPROVAL_ERROR, { error })
 		logger.error(errorInfo.message, { error })
@@ -136,63 +136,59 @@ app.get('/callback', async (c) => {
 			return c.text(errorInfo.message, errorInfo.status)
 		}
 
-		// Parse the state using our utility function
-		const state = decodeAndVerifyState(stateParam)
-		const clientId = extractClientIdFromState(state)
+		// Parse the state using our utility function.
+		// `decodedStateAsAuthRequest` is the AuthRequest object itself that was sent to Schwab.
+		const decodedStateAsAuthRequest = decodeAndVerifyState(
+			stateParam,
+		) as AuthRequest
 
-		// Get the oauthReqInfo from the state
-		const oauthReqInfo = state.oauthReqInfo
-		if (!oauthReqInfo) {
-			const errorInfo = formatAuthError(AuthError.INVALID_STATE)
-			logger.error(errorInfo.message)
-			return c.text(errorInfo.message, errorInfo.status)
-		}
+		// `extractClientIdFromState` will correctly get `decodedStateAsAuthRequest.clientId`.
+		// This also serves as validation that clientId exists within the decoded state.
+		const clientIdFromState = extractClientIdFromState(
+			decodedStateAsAuthRequest,
+		)
 
-		// Validate required AuthRequest fields
+		// Validate required AuthRequest fields directly on `decodedStateAsAuthRequest`
 		if (
-			!oauthReqInfo?.clientId ||
-			!oauthReqInfo?.redirectUri ||
-			!oauthReqInfo?.scope
+			!decodedStateAsAuthRequest?.clientId || // Should be redundant due to extractClientIdFromState
+			!decodedStateAsAuthRequest?.redirectUri ||
+			!decodedStateAsAuthRequest?.scope
 		) {
-			const errorInfo = formatAuthError(AuthError.INVALID_STATE)
-			logger.error(errorInfo.message, {
-				missingFields: {
-					clientId: !oauthReqInfo?.clientId,
-					redirectUri: !oauthReqInfo?.redirectUri,
-					scope: !oauthReqInfo?.scope,
-				},
+			const errorInfo = formatAuthError(AuthError.INVALID_STATE, {
+				detail:
+					'Decoded state object from Schwab callback is missing required AuthRequest fields (clientId, redirectUri, or scope).',
+				decodedState: decodedStateAsAuthRequest, // Log the problematic state
 			})
+			logger.error(errorInfo.message, errorInfo.details)
 			return c.text(errorInfo.message, errorInfo.status)
 		}
 
 		// Set up redirect URI and token storage for KV
 		const redirectUri = getEnvironment().SCHWAB_REDIRECT_URI
-		const userId = clientId
+		const userIdForKV = clientIdFromState // Use the validated clientId for KV key consistency
 
 		const saveToken = async (tokenData: CodeFlowTokenData) => {
 			await getEnvironment().OAUTH_KV?.put(
-				`token:${userId}`,
+				`token:${userIdForKV}`,
 				JSON.stringify(tokenData),
 			)
 		}
 
 		const loadToken = async (): Promise<CodeFlowTokenData | null> => {
-			const tokenStr = await getEnvironment().OAUTH_KV?.get(`token:${userId}`)
+			const tokenStr = await getEnvironment().OAUTH_KV?.get(
+				`token:${userIdForKV}`,
+			)
 			return tokenStr ? (JSON.parse(tokenStr) as CodeFlowTokenData) : null
 		}
 
 		// Use the validated config for auth client to ensure consistency
-		const auth = initializeSchwabAuthClient(
-			redirectUri,
-			loadToken,
-			saveToken,
-		)
+		const auth = initializeSchwabAuthClient(redirectUri, loadToken, saveToken)
 
 		// Exchange the code for tokens
 		const tokenSet = await auth.exchangeCode(code)
 
 		// Create API client
-		const client = createApiClient({
+		const client = await createApiClient({
 			config: { environment: 'PRODUCTION' },
 			auth,
 		})
@@ -209,12 +205,12 @@ app.get('/callback', async (c) => {
 			return c.text(errorInfo.message, errorInfo.status)
 		}
 
-		// Complete the authorization flow
+		// Complete the authorization flow using the decoded AuthRequest object
 		const { redirectTo } = await c.env.OAUTH_PROVIDER.completeAuthorization({
-			request: oauthReqInfo,
+			request: decodedStateAsAuthRequest,
 			userId: userIdFromSchwab,
 			metadata: { label: userIdFromSchwab },
-			scope: oauthReqInfo.scope,
+			scope: decodedStateAsAuthRequest.scope,
 			props: {
 				userId: userIdFromSchwab,
 				accessToken: tokenSet.accessToken,

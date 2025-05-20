@@ -6,6 +6,7 @@ import {
 	createSchwabAuth as SchwabAuthCreatorFromLibrary,
 	AuthStrategy,
 	type TokenData,
+	type EnhancedTokenManager,
 } from '@sudowealth/schwab-api'
 import { type Context } from 'hono'
 import { type BlankInput } from 'hono/types'
@@ -65,6 +66,8 @@ export interface ReconnectionResult {
 
 /**
  * Enhanced Schwab authentication client interface
+ * This interface might need to be reviewed if EnhancedTokenManager directly provides these.
+ * For now, keeping it as it might represent a superset of functionalities expected in MCP.
  */
 export interface SchwabCodeFlowAuth {
 	getAuthorizationUrl(options?: any): {
@@ -98,13 +101,14 @@ export interface SchwabCodeFlowAuth {
  * @param redirectUri OAuth callback URI
  * @param load Function to load tokens from storage
  * @param save Function to save tokens to storage
- * @returns Initialized Schwab auth client
+ * @returns Initialized Schwab auth client as EnhancedTokenManager
  */
 export function initializeSchwabAuthClient(
 	redirectUri: string,
 	load?: () => Promise<CodeFlowTokenData | null>,
 	save?: (tokenData: CodeFlowTokenData) => Promise<void>,
-): SchwabCodeFlowAuth {
+): EnhancedTokenManager {
+	// Changed return type
 	// Get credentials directly from the centralized environment
 	const env = getEnvironment()
 	const clientId = env.SCHWAB_CLIENT_ID
@@ -117,42 +121,45 @@ export function initializeSchwabAuthClient(
 		hasSaveFunction: !!save,
 	})
 
-	// We're using the original load/save functions directly to avoid any token formatting issues
+	// Map our load/save functions to what EnhancedTokenManager expects
+	const mappedLoad = load
+		? async () => {
+				const mcpToken = await load()
+				if (!mcpToken) return null
+				return {
+					// Map to schwab-api's TokenSet
+					accessToken: mcpToken.accessToken,
+					refreshToken: mcpToken.refreshToken,
+					expiresAt: mcpToken.expiresAt,
+				}
+			}
+		: undefined
 
-	// Restore original configuration without our modifications for token handling
-	// to ensure compatibility with the Schwab API's expected behavior
+	const mappedSave = save
+		? async (apiTokenSet: TokenData) => {
+				await save({
+					// Map from schwab-api's TokenData/TokenSet
+					accessToken: apiTokenSet.accessToken,
+					refreshToken: apiTokenSet.refreshToken || '', // ensure not undefined
+					expiresAt: apiTokenSet.expiresAt || 0, // ensure not undefined
+				})
+			}
+		: undefined
+
+	// Configure auth with mapped functions to ensure compatibility with the Schwab API
 	const authConfig = {
 		strategy: AuthStrategy.ENHANCED,
 		oauthConfig: {
 			clientId: clientId,
 			clientSecret: clientSecret,
 			redirectUri,
-			// Use the original load/save functions directly without our wrappers
-			// as they might be affecting the token format
-			load,
-			save,
-		},
-		enhancedConfig: {
-			persistence: {
-				validateOnLoad: true,
-				validateOnSave: true,
-				events: true,
-			},
-			reconnection: {
-				enabled: true,
-				retryOnTransientErrors: true,
-				maxRetries: 3,
-				backoffFactor: 1.5,
-			},
-			diagnostics: {
-				logTokenState: true,
-				detailedErrors: true,
-			},
+			load: mappedLoad,
+			save: mappedSave,
 		},
 	}
 
 	const authClient = SchwabAuthCreatorFromLibrary(authConfig)
-	return authClient as unknown as SchwabCodeFlowAuth
+	return authClient
 }
 
 /**

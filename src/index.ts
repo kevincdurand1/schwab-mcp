@@ -1,12 +1,15 @@
 import OAuthProvider from '@cloudflare/workers-oauth-provider'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { createApiClient, type SchwabApiClient } from '@sudowealth/schwab-api'
+import {
+	createApiClient,
+	type SchwabApiClient,
+	type EnhancedTokenManager,
+} from '@sudowealth/schwab-api'
 import { DurableMCP } from 'workers-mcp'
 import {
 	SchwabHandler,
 	initializeTokenManager,
 	type CodeFlowTokenData,
-	type SchwabCodeFlowAuth,
 	initializeSchwabAuthClient,
 } from './auth'
 import { type ITokenManager } from './auth/tokenInterface'
@@ -33,7 +36,7 @@ type Props = {
 }
 
 export class MyMCP extends DurableMCP<Props, Env> {
-	private tokenManager!: SchwabCodeFlowAuth
+	private tokenManager!: EnhancedTokenManager
 	private centralTokenManager!: ITokenManager
 	private client!: SchwabApiClient
 	private validatedConfig!: ValidatedEnv
@@ -104,7 +107,7 @@ export class MyMCP extends DurableMCP<Props, Env> {
 				initializeTokenManager(this.centralTokenManager)
 
 				// Create API client with auth
-				this.client = createApiClient({
+				this.client = await createApiClient({
 					config: { environment: 'PRODUCTION' },
 					auth: this.tokenManager,
 				})

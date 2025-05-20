@@ -1,10 +1,14 @@
+import {
+	EnhancedTokenManager,
+	type FullAuthClient, // Import EnhancedTokenManager
+} from '@sudowealth/schwab-api'
 import { logger } from '../shared/logger'
 import {
-	type SchwabCodeFlowAuth,
 	type CodeFlowTokenData,
 	type TokenLifecycleEvent,
 	type TokenRefreshResult,
 	type ReconnectionResult,
+	// type SchwabCodeFlowAuth, // SchwabCodeFlowAuth is an MCP interface, not directly from schwab-api
 } from './client'
 import { type ITokenManager } from './tokenInterface'
 
@@ -65,9 +69,9 @@ interface ValidateTokenResult {
  */
 export class TokenStateMachine implements ITokenManager {
 	private state: TokenState = { status: 'uninitialized' }
-	private tokenClient: SchwabCodeFlowAuth
+	private tokenClient: FullAuthClient
 	private lastReconnectTime = 0
-	private stateEventListeners: TokenStateEventListener[] = []
+	private stateEventListeners: TokenStateEventListener[] = [] // Declare the property
 
 	/**
 	 * Internal methods for state transitions to ensure consistent state updates
@@ -186,16 +190,51 @@ export class TokenStateMachine implements ITokenManager {
 	 */
 	public offStateEvent(listener: TokenStateEventListener): void {
 		this.stateEventListeners = this.stateEventListeners.filter(
-			(l) => l !== listener,
+			(l: TokenStateEventListener) => l !== listener, // Added type for l
 		)
 	}
 
-	constructor(tokenClient: SchwabCodeFlowAuth) {
+	constructor(tokenClient: FullAuthClient) {
 		this.tokenClient = tokenClient
 
 		// Subscribe to token events from the client
-		if (this.tokenClient?.onTokenEvent) {
-			this.tokenClient.onTokenEvent(this.handleTokenEvent.bind(this))
+		// Using type assertion to safely access optional method
+		// FullAuthClient itself does not define onTokenEvent, but EnhancedTokenManager does.
+		// The tokenClient is expected to be an EnhancedTokenManager instance in practice.
+		const clientWithEvents = this.tokenClient as FullAuthClient & {
+			onTokenEvent?: (callback: (event: TokenLifecycleEvent) => void) => void
+			// Add onPersistenceEvent if EnhancedTokenManager has it and it's relevant
+			onPersistenceEvent?: (
+				callback: (event: any, data: any, metadata?: any) => void,
+			) => void
+		}
+
+		// Check for onTokenEvent (from SchwabCodeFlowAuth, potentially implemented by a wrapper or future EnhancedTokenManager)
+		if (typeof clientWithEvents.onTokenEvent === 'function') {
+			logger.info('Adding onTokenEvent listener to client')
+			clientWithEvents.onTokenEvent(this.handleTokenEvent.bind(this))
+		}
+		// Check for onPersistenceEvent (from EnhancedTokenManager directly)
+		else if (
+			this.tokenClient instanceof EnhancedTokenManager &&
+			typeof this.tokenClient.onPersistenceEvent === 'function'
+		) {
+			logger.info('Adding onPersistenceEvent listener to EnhancedTokenManager')
+			this.tokenClient.onPersistenceEvent((event, data, metadata) => {
+				// Adapt TokenPersistenceEvent to TokenLifecycleEvent or handle directly
+				// This is a simplified adaptation; you might need more specific mapping
+				this.handleTokenEvent({
+					type:
+						metadata?.operation === 'refresh'
+							? 'refresh'
+							: event.toString().startsWith('token_load')
+								? 'load'
+								: 'error',
+					tokenData: data,
+					error: metadata?.error ? new Error(metadata.error) : undefined,
+					timestamp: Date.now(),
+				})
+			})
 		}
 
 		// Set up logging of state events
@@ -329,7 +368,7 @@ export class TokenStateMachine implements ITokenManager {
 	/**
 	 * Updates the token client
 	 */
-	public updateTokenClient(tokenClient: SchwabCodeFlowAuth): void {
+	public updateTokenClient(tokenClient: FullAuthClient): void {
 		logger.info('Updating token client')
 		this.tokenClient = tokenClient
 	}
@@ -476,7 +515,9 @@ export class TokenStateMachine implements ITokenManager {
 	 * a centralized way to refresh tokens regardless of the client implementation.
 	 */
 	private async performTokenRefresh(): Promise<TokenRefreshResult> {
-		logger.info('Performing token refresh')
+		logger.info(
+			'Performing token refresh using schwab-api EnhancedTokenManager',
+		)
 
 		// Emit refresh attempt event at start
 		this.emitStateEvent({
@@ -490,22 +531,69 @@ export class TokenStateMachine implements ITokenManager {
 		})
 
 		try {
-			// If the client has a forceRefresh method, use it first as it's typically more reliable
-			if (typeof this.tokenClient.forceRefresh === 'function') {
-				logger.info('Using forceRefresh method for token refresh')
-
-				const result = await this.tokenClient.forceRefresh({
-					logDetails: true,
+			if (typeof this.tokenClient.refreshIfNeeded === 'function') {
+				logger.info('Using refreshIfNeeded({ force: true }) for token refresh')
+				// refreshIfNeeded returns schwab-api's TokenData
+				const schwabApiTokenData = await this.tokenClient.refreshIfNeeded({
+					force: true,
 				})
+
+				// Map schwab-api's TokenData to your mcp's CodeFlowTokenData
+				const mcpTokenData: CodeFlowTokenData = {
+					accessToken: schwabApiTokenData.accessToken,
+					refreshToken: schwabApiTokenData.refreshToken || '', // Ensure refreshToken is not undefined
+					expiresAt: schwabApiTokenData.expiresAt || 0, // Ensure expiresAt is not undefined
+					// ... copy other relevant fields if any
+				}
+
+				const result = { success: true, tokenData: mcpTokenData }
 
 				// Emit event with result
 				this.emitStateEvent({
 					type: 'refresh-attempt',
 					timestamp: Date.now(),
-					success: result.success,
-					error: result.error || undefined,
+					success: true,
 					metadata: {
-						method: 'forceRefresh',
+						method: 'refreshIfNeeded',
+						attempt: this.refreshRetryCount + 1,
+						maxAttempts: this.MAX_REFRESH_RETRIES,
+						hasTokenData: !!result.tokenData,
+					},
+				})
+
+				return result
+			}
+			// Fall back to refresh method if refreshIfNeeded is not available
+			else if (
+				typeof this.tokenClient.refresh === 'function' &&
+				this.state.status === 'refreshing' &&
+				'tokenData' in this.state &&
+				this.state.tokenData.refreshToken
+			) {
+				logger.info('Using refresh() method with refresh token')
+				// refresh returns schwab-api's TokenData
+				const schwabApiTokenData = await this.tokenClient.refresh(
+					this.state.tokenData.refreshToken,
+					{ force: true },
+				)
+
+				// Map schwab-api's TokenData to your mcp's CodeFlowTokenData
+				const mcpTokenData: CodeFlowTokenData = {
+					accessToken: schwabApiTokenData.accessToken,
+					refreshToken: schwabApiTokenData.refreshToken || '', // Ensure refreshToken is not undefined
+					expiresAt: schwabApiTokenData.expiresAt || 0, // Ensure expiresAt is not undefined
+					// ... copy other relevant fields if any
+				}
+
+				const result = { success: true, tokenData: mcpTokenData }
+
+				// Emit event with result
+				this.emitStateEvent({
+					type: 'refresh-attempt',
+					timestamp: Date.now(),
+					success: true,
+					metadata: {
+						method: 'refresh',
 						attempt: this.refreshRetryCount + 1,
 						maxAttempts: this.MAX_REFRESH_RETRIES,
 						hasTokenData: !!result.tokenData,
@@ -515,60 +603,16 @@ export class TokenStateMachine implements ITokenManager {
 				return result
 			}
 
-			// Fall back to other methods if forceRefresh is not available
-			logger.info(
-				'forceRefresh not available, attempting to refresh via more primitive methods',
+			const noMethodError = new Error(
+				'Schwab API client does not support a suitable refresh mechanism (refreshIfNeeded or refresh).',
 			)
-
-			// If we have tokenData with a refresh token, we can try to construct our own refresh
-			if (
-				this.state.status === 'refreshing' &&
-				'tokenData' in this.state &&
-				this.state.tokenData.refreshToken
-			) {
-				// We'll use the basic client methods to try to maintain backward compatibility
-				// in case the client's implementation changes
-
-				// This would be where we'd implement a more primitive refresh mechanism
-				// using the client's basic methods if needed
-
-				// Since forceRefresh is the only implemented mechanism, throw a specific error
-				const error = new Error('SchwabCodeFlowAuth client does not support forceRefresh.');
-				
-				const result = {
-					success: false,
-					error,
-				}
-
-				// Emit event with result
-				this.emitStateEvent({
-					type: 'refresh-attempt',
-					timestamp: Date.now(),
-					success: false,
-					error: result.error,
-					metadata: {
-						method: 'alternative',
-						attempt: this.refreshRetryCount + 1,
-						maxAttempts: this.MAX_REFRESH_RETRIES,
-					},
-				})
-
-				return result
-			}
-
-			const result = {
-				success: false,
-				error: new Error(
-					'Cannot refresh - no valid refresh mechanism available',
-				),
-			}
 
 			// Emit event with result
 			this.emitStateEvent({
 				type: 'refresh-attempt',
 				timestamp: Date.now(),
 				success: false,
-				error: result.error,
+				error: noMethodError,
 				metadata: {
 					method: 'none',
 					attempt: this.refreshRetryCount + 1,
@@ -576,7 +620,7 @@ export class TokenStateMachine implements ITokenManager {
 				},
 			})
 
-			return result
+			return { success: false, error: noMethodError }
 		} catch (error) {
 			logger.error('Error during token refresh operation', { error })
 
@@ -715,7 +759,7 @@ export class TokenStateMachine implements ITokenManager {
 	 * the highest-level approaches and falling back to more basic methods if needed.
 	 * The order of operations is:
 	 *
-	 * 1. Try using the client's handleReconnection method if available
+	 * 1. Try using the client's reconnect method if available (EnhancedTokenManager)
 	 * 2. If that fails, try to get the token data and validate it
 	 * 3. If the token is expired, try to refresh it
 	 * 4. If all else fails, try to initialize from scratch
@@ -735,16 +779,47 @@ export class TokenStateMachine implements ITokenManager {
 		})
 
 		try {
-			// Strategy 1: Use client's handleReconnection if available
-			if (typeof this.tokenClient.handleReconnection === 'function') {
-				logger.info('Using client-provided reconnection method')
-				const clientResult = await this.tokenClient.handleReconnection({
-					forceTokenRefresh: false, // We will handle refresh ourselves if needed
-					validateTokens: true,
-				})
+			// Strategy 1: Use client's reconnect method if available (EnhancedTokenManager)
+			if (
+				this.tokenClient instanceof EnhancedTokenManager &&
+				typeof this.tokenClient.reconnect === 'function'
+			) {
+				logger.info('Using EnhancedTokenManager reconnect method')
+				const reconnectSuccessful = await this.tokenClient.reconnect()
 
-				if (clientResult.success) {
-					logger.info('Client reconnection succeeded')
+				if (reconnectSuccessful) {
+					logger.info('EnhancedTokenManager reconnect succeeded')
+
+					// Get token data after successful reconnection
+					const tokenData = await this.tokenClient.getTokenData()
+
+					// Validate the token data
+					const validationResult = this.validateTokenData(tokenData)
+
+					if (!validationResult.valid) {
+						const errorMsg =
+							validationResult.reason || 'Invalid token data after reconnect'
+						logger.error(errorMsg)
+
+						return {
+							success: false,
+							tokenRestored: false,
+							refreshPerformed: false,
+							error: new Error(errorMsg),
+						}
+					}
+
+					// Use the validated token data
+					const validTokenData = validationResult.tokenData!
+
+					// Create result with same format as handleReconnection
+					const result = {
+						success: true,
+						tokenRestored: true,
+						refreshPerformed: false, // reconnect() itself might refresh, but we mark it false here as this method didn't directly call refresh
+						tokenData: validTokenData as CodeFlowTokenData,
+						isExpired: this.isTokenExpired(validTokenData),
+					} as ReconnectionResult & { isExpired?: boolean }
 
 					// Emit success event
 					this.emitStateEvent({
@@ -752,32 +827,33 @@ export class TokenStateMachine implements ITokenManager {
 						timestamp: Date.now(),
 						success: true,
 						metadata: {
-							method: 'client',
+							method: 'reconnect',
 							attempt: this.reconnectRetryCount + 1,
 							maxAttempts: this.MAX_RECONNECT_RETRIES,
-							tokenRestored: clientResult.tokenRestored,
-							refreshPerformed: clientResult.refreshPerformed,
+							tokenRestored: result.tokenRestored,
+							refreshPerformed: result.refreshPerformed,
 						},
 					})
 
-					return clientResult
+					return result
 				}
 
-				// Emit failure event
+				// Emit failure event for reconnect
 				this.emitStateEvent({
 					type: 'reconnect-attempt',
 					timestamp: Date.now(),
 					success: false,
-					error: clientResult.error || undefined,
 					metadata: {
-						method: 'client',
+						method: 'reconnect',
 						attempt: this.reconnectRetryCount + 1,
 						maxAttempts: this.MAX_RECONNECT_RETRIES,
-						fallbackAvailable: true,
+						fallbackAvailable: true, // Fallback to manual reconnection
 					},
 				})
 
-				logger.warn('Client reconnection failed, trying alternative strategies')
+				logger.warn(
+					'EnhancedTokenManager reconnect failed, falling back to manual reconnection',
+				)
 			}
 
 			// Strategy 2: Manual reconnection by getting current token data and validating
@@ -876,22 +952,24 @@ export class TokenStateMachine implements ITokenManager {
 
 				// If reconnection successful
 				if (result.success) {
-					let validTokenData;
-					
+					let validTokenData
+
 					// Check if reconnection result already includes valid token data
 					if (result.tokenData) {
 						// Use the token data from the reconnection result
 						logger.info('Using token data from reconnection result')
-						validTokenData = result.tokenData as CodeFlowTokenData;
+						validTokenData = result.tokenData as CodeFlowTokenData
 					} else {
 						// Fallback: Get token data if not included in the result
-						logger.info('Token data not in reconnection result, fetching from client')
+						logger.info(
+							'Token data not in reconnection result, fetching from client',
+						)
 						const tokenData = await this.tokenClient.getTokenData()
 						if (!tokenData) {
 							logger.warn('Reconnection succeeded but no token data available')
 							continue // Try again
 						}
-						
+
 						const validationResult = this.validateTokenData(tokenData)
 						if (!validationResult.valid) {
 							logger.warn(
@@ -899,14 +977,15 @@ export class TokenStateMachine implements ITokenManager {
 							)
 							continue // Try again
 						}
-						
+
 						validTokenData = validationResult.tokenData!
 					}
 
 					// Determine if token is expired
 					const isExpired =
-						'isExpired' in result
-							? result.isExpired
+						'isExpired' in result &&
+						typeof (result as any).isExpired === 'boolean'
+							? (result as any).isExpired
 							: this.isTokenExpired(validTokenData)
 
 					// Update state based on token expiration
