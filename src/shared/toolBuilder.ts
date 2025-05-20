@@ -18,8 +18,8 @@ export type ToolResponse<T = any> =
  * Represents the structure of MCP content array responses
  */
 export type McpContentArray = {
-	content: Array<{ type: string; text: string }>;
-	isError?: boolean;
+	content: Array<{ type: string; text: string }>
+	isError?: boolean
 }
 
 /**
@@ -30,13 +30,13 @@ function formatResponse(response: ToolResponse | Result<any>): McpContentArray {
 	if (response && 'success' in response) {
 		if (response.success) {
 			// Get the data payload from either ToolResponse or Result
-			const dataToLog = 'data' in response ? response.data : null;
-			
+			const dataToLog = 'data' in response ? response.data : null
+
 			// Determine the message to display
-			const message = 
-				('message' in response && response.message) || 
-				(dataToLog && (dataToLog as any).message) || 
-				'Operation successful';
+			const message =
+				('message' in response && response.message) ||
+				(dataToLog && (dataToLog as any).message) ||
+				'Operation successful'
 
 			// Create a valid content array for MCP
 			return {
@@ -52,18 +52,47 @@ function formatResponse(response: ToolResponse | Result<any>): McpContentArray {
 				],
 			}
 		} else {
-			return {
-				content: [
-					{
+			// Prepare the error message text
+			let errorMessage = 'An error occurred'
+
+			if ('error' in response && response.error) {
+				errorMessage =
+					response.error instanceof Error
+						? response.error.message
+						: String(response.error)
+			}
+
+			// Create content array with error details
+			const content = [{ type: 'text', text: errorMessage }]
+
+			// Add formatted details if available
+			if ('details' in response && response.details) {
+				// Check for formatted details from Schwab API errors
+				if (response.details.formattedDetails) {
+					content.push({
 						type: 'text',
-						text:
-							'error' in response && response.error
-								? response.error instanceof Error
-									? response.error.message
-									: String(response.error)
-								: 'An error occurred',
-					},
-				],
+						text: `Details: ${response.details.formattedDetails}`,
+					})
+				}
+
+				// Add useful diagnostic information
+				const diagnosticInfo = {
+					status: response.details.status,
+					code: response.details.code,
+					requestId: response.details.requestId,
+				}
+
+				// Only add diagnostic info if at least one property has a value
+				if (Object.values(diagnosticInfo).some((val) => val !== undefined)) {
+					content.push({
+						type: 'text',
+						text: `Diagnostic Info: ${JSON.stringify(diagnosticInfo)}`,
+					})
+				}
+			}
+
+			return {
+				content,
 				isError: true,
 			}
 		}
@@ -76,15 +105,92 @@ function formatResponse(response: ToolResponse | Result<any>): McpContentArray {
 }
 
 /**
+ * Type guard to check if an error is a SchwabApiError
+ */
+function isSchwabApiError(error: any): boolean {
+	return (
+		error &&
+		typeof error === 'object' &&
+		(error.name === 'SchwabApiError' ||
+			error.constructor?.name === 'SchwabApiError')
+	)
+}
+
+/**
+ * Type guard to check if an error is a SchwabAuthError
+ */
+function isAuthError(error: any): boolean {
+	return (
+		error &&
+		typeof error === 'object' &&
+		(error.name === 'SchwabAuthError' ||
+			error.constructor?.name === 'SchwabAuthError')
+	)
+}
+
+/**
  * Creates a tool error response
+ *
+ * Enhances error handling for Schwab API errors by extracting detailed information
+ * including status codes, error codes, request IDs, and formatted details.
  */
 export function toolError(
 	message: string | Error | unknown,
 	details?: Record<string, any>,
 ): ToolResponse {
 	const error = message instanceof Error ? message : new Error(String(message))
-	logger.error('Tool error', { error, details })
-	return { success: false, error, details }
+
+	// Extract enhanced details from Schwab API errors
+	let enhancedDetails = { ...details }
+
+	if (isSchwabApiError(error) || isAuthError(error)) {
+		// Access rich error information from Schwab API errors
+		const apiError = error as any
+		enhancedDetails = {
+			...enhancedDetails,
+			// Include HTTP status if available
+			status: apiError.status,
+			// Include API/Auth error code if available
+			code: apiError.code,
+			// Include parsed error details if available
+			parsedError: apiError.parsedError,
+		}
+
+		// Add request ID for traceability if the method exists
+		if (typeof apiError.getRequestId === 'function') {
+			enhancedDetails.requestId = apiError.getRequestId()
+		}
+
+		// Add formatted details for user-friendly messages if the method exists
+		if (typeof apiError.getFormattedDetails === 'function') {
+			enhancedDetails.formattedDetails = apiError.getFormattedDetails()
+		}
+	}
+
+	logger.error('Tool error', { error, details: enhancedDetails })
+	return { success: false, error, details: enhancedDetails }
+}
+
+/**
+ * Test function to verify Schwab API error handling
+ * This is for development/testing only and should be removed in production
+ */
+export function _testSchwabApiErrorHandling(): ToolResponse {
+	// Mock a SchwabApiError
+	const mockSchwabApiError = new Error('API request failed') as any
+	mockSchwabApiError.name = 'SchwabApiError'
+	mockSchwabApiError.status = 400
+	mockSchwabApiError.code = 'INVALID_PARAMETER'
+	mockSchwabApiError.parsedError = {
+		field: 'symbol',
+		message: 'Invalid symbol format',
+	}
+	mockSchwabApiError.getRequestId = () => 'req-123456789'
+	mockSchwabApiError.getFormattedDetails = () =>
+		'Invalid parameter: The symbol format is incorrect'
+
+	// Test our error handling with the mock error
+	return toolError(mockSchwabApiError, { source: 'testErrorHandling' })
 }
 
 /**
