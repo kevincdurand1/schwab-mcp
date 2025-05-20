@@ -4,6 +4,7 @@ import {
 } from '@cloudflare/workers-oauth-provider'
 import { createApiClient } from '@sudowealth/schwab-api'
 import { Hono } from 'hono'
+import { EnvConfig } from '../config/envConfig'
 import { logger } from '../shared/logger'
 import { type Env } from '../types/env'
 import {
@@ -16,6 +17,7 @@ import {
 	parseRedirectApproval,
 	renderApprovalDialog,
 } from './cookies'
+import { AuthError, formatAuthError } from './errorMessages'
 
 // Create Hono app with appropriate bindings
 const app = new Hono<{ Bindings: Env & { OAUTH_PROVIDER: OAuthHelpers } }>()
@@ -29,12 +31,18 @@ const app = new Hono<{ Bindings: Env & { OAUTH_PROVIDER: OAuthHelpers } }>()
  */
 app.get('/authorize', async (c) => {
 	try {
+		// Ensure EnvConfig is initialized
+		if (!EnvConfig.isInitialized()) {
+			EnvConfig.initialize(c.env)
+		}
+
 		const oauthReqInfo = await c.env.OAUTH_PROVIDER.parseAuthRequest(c.req.raw)
 		const { clientId } = oauthReqInfo
 
 		if (!clientId) {
-			logger.error('Invalid request: clientId is missing')
-			return c.text('Invalid request', 400)
+			const errorInfo = formatAuthError(AuthError.MISSING_CLIENT_ID)
+			logger.error(errorInfo.message)
+			return c.text('Invalid request', errorInfo.status)
 		}
 
 		// If client ID is already approved, redirect directly to Schwab
@@ -42,7 +50,7 @@ app.get('/authorize', async (c) => {
 			await clientIdAlreadyApproved(
 				c.req.raw,
 				oauthReqInfo.clientId,
-				c.env.COOKIE_ENCRYPTION_KEY,
+				EnvConfig.COOKIE_ENCRYPTION_KEY,
 			)
 		) {
 			return redirectToSchwab(c, oauthReqInfo)
@@ -59,8 +67,9 @@ app.get('/authorize', async (c) => {
 			state: { oauthReqInfo },
 		})
 	} catch (error) {
-		logger.error('Error handling authorization request', { error })
-		return c.text('Error processing authorization request', 500)
+		const errorInfo = formatAuthError(AuthError.AUTH_REQUEST_ERROR, { error })
+		logger.error(errorInfo.message, { error })
+		return c.text(errorInfo.message, errorInfo.status)
 	}
 })
 
@@ -72,20 +81,27 @@ app.get('/authorize', async (c) => {
  */
 app.post('/authorize', async (c) => {
 	try {
+		// Ensure EnvConfig is initialized
+		if (!EnvConfig.isInitialized()) {
+			EnvConfig.initialize(c.env)
+		}
+
 		const { state, headers } = await parseRedirectApproval(
 			c.req.raw,
-			c.env.COOKIE_ENCRYPTION_KEY,
+			EnvConfig.COOKIE_ENCRYPTION_KEY,
 		)
 
 		if (!state.oauthReqInfo) {
-			logger.error('Invalid request: state.oauthReqInfo is missing')
-			return c.text('Invalid request', 400)
+			const errorInfo = formatAuthError(AuthError.MISSING_STATE)
+			logger.error(errorInfo.message)
+			return c.text('Invalid request', errorInfo.status)
 		}
 
 		return redirectToSchwab(c, state.oauthReqInfo, headers)
 	} catch (error) {
-		logger.error('Error handling authorization approval', { error })
-		return c.text('Error processing approval', 500)
+		const errorInfo = formatAuthError(AuthError.AUTH_APPROVAL_ERROR, { error })
+		logger.error(errorInfo.message, { error })
+		return c.text(errorInfo.message, errorInfo.status)
 	}
 })
 
@@ -103,18 +119,20 @@ app.get('/callback', async (c) => {
 		const code = c.req.query('code')
 
 		if (!stateParam || !code) {
-			logger.error('Missing required parameters', {
+			const errorInfo = formatAuthError(AuthError.MISSING_PARAMETERS, {
 				hasState: !!stateParam,
 				hasCode: !!code,
 			})
-			return c.text('Missing required parameters', 400)
+			logger.error(errorInfo.message, errorInfo.details)
+			return c.text(errorInfo.message, errorInfo.status)
 		}
 
 		// Parse the state to get the oauthReqInfo
 		const oauthReqInfo = JSON.parse(atob(stateParam)) as AuthRequest
 		if (!oauthReqInfo.clientId) {
-			logger.error('Invalid state: clientId is missing')
-			return c.text('Invalid state', 400)
+			const errorInfo = formatAuthError(AuthError.INVALID_STATE)
+			logger.error(errorInfo.message)
+			return c.text(errorInfo.message, errorInfo.status)
 		}
 
 		// Set up redirect URI and token storage for KV
@@ -122,15 +140,18 @@ app.get('/callback', async (c) => {
 		const userId = oauthReqInfo.clientId
 
 		const saveToken = async (tokenData: CodeFlowTokenData) => {
-			await c.env.OAUTH_KV?.put(`token:${userId}`, JSON.stringify(tokenData))
+			await EnvConfig.OAUTH_KV?.put(
+				`token:${userId}`,
+				JSON.stringify(tokenData),
+			)
 		}
 
 		const loadToken = async (): Promise<CodeFlowTokenData | null> => {
-			const tokenStr = await c.env.OAUTH_KV?.get(`token:${userId}`)
+			const tokenStr = await EnvConfig.OAUTH_KV?.get(`token:${userId}`)
 			return tokenStr ? (JSON.parse(tokenStr) as CodeFlowTokenData) : null
 		}
 
-		// Initialize auth client with persistence
+		// Always use the original env object for auth client to ensure consistency
 		const auth = initializeSchwabAuthClient(
 			c.env,
 			redirectUri,
@@ -154,8 +175,9 @@ app.get('/callback', async (c) => {
 			userPreferences?.streamerInfo?.[0]?.schwabClientCorrelId
 
 		if (!userIdFromSchwab) {
-			logger.error('No user ID found in UserPreference')
-			return c.text('Failed to retrieve user information', 500)
+			const errorInfo = formatAuthError(AuthError.NO_USER_ID)
+			logger.error(errorInfo.message)
+			return c.text(errorInfo.message, errorInfo.status)
 		}
 
 		// Complete the authorization flow
@@ -174,11 +196,12 @@ app.get('/callback', async (c) => {
 
 		return Response.redirect(redirectTo)
 	} catch (error) {
-		logger.error('Authorization failed', {
+		const errorInfo = formatAuthError(AuthError.AUTH_CALLBACK_ERROR, {
 			error,
 			errorMessage: error instanceof Error ? error.message : String(error),
 		})
-		return c.text('Authorization failed', 500)
+		logger.error(errorInfo.message, errorInfo.details)
+		return c.text(errorInfo.message, errorInfo.status)
 	}
 })
 

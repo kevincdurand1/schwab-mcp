@@ -9,8 +9,10 @@ import {
 } from '@sudowealth/schwab-api'
 import { type Context } from 'hono'
 import { type BlankInput } from 'hono/types'
+import { EnvConfig } from '../config/envConfig'
 import { logger } from '../shared/logger'
 import { type Env } from '../types/env'
+import { AuthError, formatAuthError } from './errorMessages'
 
 /**
  * Token data structure required by Schwab enhanced authentication strategy
@@ -105,19 +107,35 @@ export function initializeSchwabAuthClient(
 	load?: () => Promise<CodeFlowTokenData | null>,
 	save?: (tokenData: CodeFlowTokenData) => Promise<void>,
 ): SchwabCodeFlowAuth {
+	// Ensure EnvConfig is initialized with the provided env
+	if (!EnvConfig.isInitialized()) {
+		EnvConfig.initialize(env)
+	}
+
+	// Use the environment variables directly from env for stability
+	// This ensures we don't have any potential issues with the EnvConfig
+	const clientId = env.SCHWAB_CLIENT_ID
+	const clientSecret = env.SCHWAB_CLIENT_SECRET
+
 	logger.info('Initializing enhanced Schwab Auth client', {
-		hasClientId: !!env.SCHWAB_CLIENT_ID,
-		hasClientSecret: !!env.SCHWAB_CLIENT_SECRET,
+		hasClientId: !!clientId,
+		hasClientSecret: !!clientSecret,
 		hasLoadFunction: !!load,
 		hasSaveFunction: !!save,
 	})
 
+	// We're using the original load/save functions directly to avoid any token formatting issues
+
+	// Restore original configuration without our modifications for token handling
+	// to ensure compatibility with the Schwab API's expected behavior
 	const authConfig = {
 		strategy: AuthStrategy.ENHANCED,
 		oauthConfig: {
-			clientId: env.SCHWAB_CLIENT_ID,
-			clientSecret: env.SCHWAB_CLIENT_SECRET,
+			clientId: clientId,
+			clientSecret: clientSecret,
 			redirectUri,
+			// Use the original load/save functions directly without our wrappers
+			// as they might be affecting the token format
 			load,
 			save,
 		},
@@ -189,7 +207,8 @@ export async function redirectToSchwab(
 			return Response.redirect(url.href, 302)
 		}
 	} catch (error) {
-		logger.error('Error creating authorization redirect', { error })
-		return new Response('Error creating authorization URL', { status: 500 })
+		const errorInfo = formatAuthError(AuthError.AUTH_URL_ERROR, { error })
+		logger.error(errorInfo.message, { error })
+		return new Response(errorInfo.message, { status: errorInfo.status })
 	}
 }

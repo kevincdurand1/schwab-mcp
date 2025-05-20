@@ -2,6 +2,7 @@ import {
 	type ClientInfo,
 	type AuthRequest,
 } from '@cloudflare/workers-oauth-provider'
+import { AuthError, formatAuthError } from './errorMessages'
 
 const MCP_APPROVAL = 'mcp-approved-clients'
 const ONE_YEAR_IN_SECONDS = 31536000
@@ -227,7 +228,8 @@ function decodeState<T = any>(encoded: string): T {
 		return JSON.parse(jsonString) as T
 	} catch (e) {
 		console.error('Error decoding state:', e)
-		throw new Error('Could not decode state')
+		const errorInfo = formatAuthError(AuthError.COOKIE_DECODE_ERROR)
+		throw new Error(errorInfo.message)
 	}
 }
 
@@ -238,9 +240,8 @@ function decodeState<T = any>(encoded: string): T {
  */
 async function importKey(secret: string): Promise<CryptoKey> {
 	if (!secret) {
-		throw new Error(
-			'COOKIE_SECRET is not defined. A secret key is required for signing cookies.',
-		)
+		const errorInfo = formatAuthError(AuthError.COOKIE_SECRET_MISSING)
+		throw new Error(errorInfo.message)
 	}
 	const enc = new TextEncoder()
 	return crypto.subtle.importKey(
@@ -315,7 +316,8 @@ async function getApprovedClientsFromCookie(
 	const parts = cookieValue.split('.')
 
 	if (parts.length !== 2) {
-		console.warn('Invalid cookie format received.')
+		const errorInfo = formatAuthError(AuthError.INVALID_COOKIE_FORMAT)
+		console.warn(errorInfo.message)
 		return undefined
 	}
 
@@ -348,7 +350,8 @@ async function getApprovedClientsFromCookie(
 	)
 
 	if (!isValid) {
-		console.warn('Cookie signature verification failed.')
+		const errorInfo = formatAuthError(AuthError.COOKIE_SIGNATURE_FAILED)
+		console.warn(errorInfo.message)
 		return undefined
 	}
 
@@ -641,7 +644,8 @@ export async function parseRedirectApproval(
 	cookieSecret: string,
 ): Promise<ParsedApprovalResult> {
 	if (request.method !== 'POST') {
-		throw new Error('Invalid request method. Expected POST.')
+		const errorInfo = formatAuthError(AuthError.INVALID_REQUEST_METHOD)
+		throw new Error(errorInfo.message)
 	}
 
 	let state: any
@@ -652,18 +656,20 @@ export async function parseRedirectApproval(
 		const encodedState = formData.get('state')
 
 		if (typeof encodedState !== 'string' || !encodedState) {
-			throw new Error("Missing or invalid 'state' in form data.")
+			const errorInfo = formatAuthError(AuthError.MISSING_FORM_STATE)
+			throw new Error(errorInfo.message)
 		}
 
 		state = decodeState<{ oauthReqInfo?: AuthRequest }>(encodedState) // Decode the state
 		clientId = state?.oauthReqInfo?.clientId // Extract clientId from within the state
 
 		if (!clientId) {
-			throw new Error('Could not extract clientId from state object.')
+			const errorInfo = formatAuthError(AuthError.CLIENT_ID_EXTRACTION_ERROR)
+			throw new Error(errorInfo.message)
 		}
 	} catch (e) {
 		console.error('Error processing form submission:', e)
-		// Rethrow or handle as appropriate, maybe return a specific error response
+		// Rethrow with centralized error format
 		throw new Error(
 			`Failed to parse approval form: ${e instanceof Error ? e.message : String(e)}`,
 		)

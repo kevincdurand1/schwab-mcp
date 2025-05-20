@@ -120,10 +120,15 @@ export function schwabTool<
 			try {
 				parsedInput = schema.parse(args)
 			} catch (validationError) {
-				logger.error(`Input validation error in schwabTool`, { validationError })
+				logger.error(`Input validation error in schwabTool`, {
+					validationError,
+				})
 				return toToolResponse(
 					formatError(new Error('Invalid input'), {
-						details: validationError instanceof Error ? validationError.message : String(validationError),
+						details:
+							validationError instanceof Error
+								? validationError.message
+								: String(validationError),
 					}),
 				)
 			}
