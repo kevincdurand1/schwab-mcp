@@ -7,6 +7,7 @@ import {
 	AuthStrategy,
 	type TokenData,
 	type EnhancedTokenManager,
+	type EnhancedTokenManagerOptions,
 } from '@sudowealth/schwab-api'
 import { type Context } from 'hono'
 import { type BlankInput } from 'hono/types'
@@ -65,37 +66,6 @@ export interface ReconnectionResult {
 }
 
 /**
- * Enhanced Schwab authentication client interface
- * This interface might need to be reviewed if EnhancedTokenManager directly provides these.
- * For now, keeping it as it might represent a superset of functionalities expected in MCP.
- */
-export interface SchwabCodeFlowAuth {
-	getAuthorizationUrl(options?: any): {
-		authUrl: string
-		pkce?: { codeChallenge: string; codeVerifier: string }
-	}
-	exchangeCode(code: string, pkceVerifier?: string): Promise<TokenData>
-
-	// Core token methods
-	getAccessToken(): Promise<string | null>
-	getTokenData(): Promise<TokenData | null>
-	supportsRefresh(): boolean
-
-	// Enhanced token management features
-	onTokenEvent(callback: (event: TokenLifecycleEvent) => void): void
-	validateToken(): Promise<TokenValidationResult>
-	forceRefresh(options?: {
-		retryOnFailure?: boolean
-		logDetails?: boolean
-	}): Promise<TokenRefreshResult>
-	handleReconnection(options?: {
-		forceTokenRefresh?: boolean
-		validateTokens?: boolean
-	}): Promise<ReconnectionResult>
-	getTokenDiagnostics(): any
-}
-
-/**
  * Creates a Schwab Auth client with enhanced features
  *
  * @param redirectUri OAuth callback URI
@@ -108,7 +78,6 @@ export function initializeSchwabAuthClient(
 	load?: () => Promise<CodeFlowTokenData | null>,
 	save?: (tokenData: CodeFlowTokenData) => Promise<void>,
 ): EnhancedTokenManager {
-	// Changed return type
 	// Get credentials directly from the centralized environment
 	const env = getEnvironment()
 	const clientId = env.SCHWAB_CLIENT_ID
@@ -146,16 +115,25 @@ export function initializeSchwabAuthClient(
 			}
 		: undefined
 
-	// Configure auth with mapped functions to ensure compatibility with the Schwab API
+	// Build options for EnhancedTokenManager with MCP-specific defaults
+	const tokenManagerOptions: EnhancedTokenManagerOptions = {
+		clientId,
+		clientSecret,
+		redirectUri,
+		load: mappedLoad,
+		save: mappedSave,
+		// MCP-specific desired defaults for EnhancedTokenManager
+		validateTokens: true, // Validate tokens on load/use
+		autoReconnect: true, // Enable auto reconnection
+		debug: true, // Enable debug logging
+		traceOperations: true, // Enable operation tracing
+		refreshThresholdMs: 5 * 60 * 1000, // 5 minutes before expiration
+	}
+
+	// Configure auth with enhanced token manager
 	const authConfig = {
 		strategy: AuthStrategy.ENHANCED,
-		oauthConfig: {
-			clientId: clientId,
-			clientSecret: clientSecret,
-			redirectUri,
-			load: mappedLoad,
-			save: mappedSave,
-		},
+		oauthConfig: tokenManagerOptions,
 	}
 
 	const authClient = SchwabAuthCreatorFromLibrary(authConfig)
@@ -188,24 +166,66 @@ export async function redirectToSchwab(
 		const redirectUri = getEnvironment().SCHWAB_REDIRECT_URI
 		const auth = initializeSchwabAuthClient(redirectUri)
 
-		// Get the authorization URL
-		const { authUrl } = auth.getAuthorizationUrl()
+		/**
+		 * FUTURE ENHANCEMENT: PKCE Support
+		 * 
+		 * When EnhancedTokenManager supports PKCE, we should:
+		 * 
+		 * 1. Generate PKCE code challenge and verifier:
+		 *    - Generate random code_verifier
+		 *    - Hash and base64-encode to create code_challenge
+		 * 
+		 * 2. Store the code_verifier securely:
+		 *    - Short-lived HTTPOnly cookie 
+		 *    - Associated with state parameter
+		 *    - Only accessible during /callback 
+		 * 
+		 * 3. Pass parameters to getAuthorizationUrl:
+		 *    - Include code_challenge and code_challenge_method
+		 *    - They should be passed through to the Schwab authorization URL
+		 * 
+		 * 4. In the callback handler:
+		 *    - Retrieve the stored code_verifier
+		 *    - Pass it to auth.exchangeCode(code, { codeVerifier })
+		 *    - EnhancedTokenManager should include it in the token request
+		 *   
+		 * For reference, here's how the PKCE flow would work:
+		 * 
+		 * const codeVerifier = generateRandomString(128);
+		 * const codeChallenge = await generateCodeChallenge(codeVerifier);
+		 * 
+		 * // Store codeVerifier securely (e.g., in a cookie)
+		 * c.cookie('pkce_verifier', codeVerifier, {
+		 *   httpOnly: true,
+		 *   secure: true,
+		 *   path: '/auth/callback',
+		 *   maxAge: 300 // Short-lived (5 minutes)
+		 * });
+		 * 
+		 * const { authUrl } = auth.getAuthorizationUrl({
+		 *   state: btoa(JSON.stringify(oauthReqInfo)),
+		 *   codeChallenge: codeChallenge,
+		 *   codeChallengeMethod: 'S256'
+		 * });
+		 */
 
-		// Add state parameter with encoded oauthReqInfo
-		const url = new URL(authUrl)
-		url.searchParams.set('state', btoa(JSON.stringify(oauthReqInfo)))
+		// Get the authorization URL with state parameter
+		// Properly pass state to EnhancedTokenManager's getAuthorizationUrl
+		const { authUrl } = auth.getAuthorizationUrl({
+			state: btoa(JSON.stringify(oauthReqInfo)),
+		})
 
 		// Create redirect response with any additional headers
 		if (Object.keys(headers).length > 0) {
 			return new Response(null, {
 				status: 302,
 				headers: {
-					Location: url.href,
+					Location: authUrl,
 					...headers,
 				},
 			})
 		} else {
-			return Response.redirect(url.href, 302)
+			return Response.redirect(authUrl, 302)
 		}
 	} catch (error) {
 		const errorInfo = formatAuthError(AuthError.AUTH_URL_ERROR, { error })
