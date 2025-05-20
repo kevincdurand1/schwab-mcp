@@ -112,14 +112,11 @@ export function initializeSchwabAuthClient(
 		EnvConfig.initialize(env)
 	}
 
-	// Use the environment variables directly from env for stability
-	// This ensures we don't have any potential issues with the EnvConfig
-	const clientId = env.SCHWAB_CLIENT_ID
-	const clientSecret = env.SCHWAB_CLIENT_SECRET
+	// Use the environment variables from EnvConfig which performs validation
+	const clientId = EnvConfig.SCHWAB_CLIENT_ID
+	const clientSecret = EnvConfig.SCHWAB_CLIENT_SECRET
 
 	logger.info('Initializing enhanced Schwab Auth client', {
-		hasClientId: !!clientId,
-		hasClientSecret: !!clientSecret,
 		hasLoadFunction: !!load,
 		hasSaveFunction: !!save,
 	})

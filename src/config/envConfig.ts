@@ -44,40 +44,60 @@ export class EnvConfig {
 	}
 
 	/**
+	 * Validates that a required environment variable exists and is not empty
+	 *
+	 * @param variableName The name of the environment variable
+	 * @param value The value of the environment variable
+	 * @throws Error if the environment variable is missing or empty
+	 */
+	private static validateRequiredVariable(
+		variableName: string,
+		value: string | undefined,
+	): string {
+		if (!value) {
+			logger.error(
+				`Required environment variable ${variableName} is missing or empty`,
+			)
+			throw new Error(
+				`Required environment variable ${variableName} is missing or empty`,
+			)
+		}
+		return value
+	}
+
+	/**
 	 * Gets the Schwab client ID
+	 * @throws Error if the client ID is missing or empty
 	 */
 	public static get SCHWAB_CLIENT_ID(): string {
-		return this.getInstance().env!.SCHWAB_CLIENT_ID
+		const value = this.getInstance().env!.SCHWAB_CLIENT_ID
+		return this.validateRequiredVariable('SCHWAB_CLIENT_ID', value)
 	}
 
 	/**
 	 * Gets the Schwab client secret
+	 * @throws Error if the client secret is missing or empty
 	 */
 	public static get SCHWAB_CLIENT_SECRET(): string {
-		return this.getInstance().env!.SCHWAB_CLIENT_SECRET
+		const value = this.getInstance().env!.SCHWAB_CLIENT_SECRET
+		return this.validateRequiredVariable('SCHWAB_CLIENT_SECRET', value)
 	}
 
 	/**
 	 * Gets the cookie encryption key
+	 * @throws Error if the cookie encryption key is missing or empty
 	 */
 	public static get COOKIE_ENCRYPTION_KEY(): string {
-		return this.getInstance().env!.COOKIE_ENCRYPTION_KEY
+		const value = this.getInstance().env!.COOKIE_ENCRYPTION_KEY
+		return this.validateRequiredVariable('COOKIE_ENCRYPTION_KEY', value)
 	}
 
 	/**
 	 * Gets the OAuth KV namespace
+	 * Note: This is optional, so no validation is performed
 	 */
 	public static get OAUTH_KV(): KVNamespace | undefined {
 		return this.getInstance().env!.OAUTH_KV
-	}
-
-	/**
-	 * Gets the raw Env object
-	 *
-	 * This should be used sparingly, only when access to the entire Env object is needed
-	 */
-	public static getRawEnv(): Env {
-		return this.getInstance().env!
 	}
 
 	/**
@@ -88,11 +108,11 @@ export class EnvConfig {
 	public static isInitialized(): boolean {
 		return !!EnvConfig.instance && !!EnvConfig.instance.env
 	}
-	
+
 	/**
 	 * Gets diagnostic information about the EnvConfig state
 	 * Useful for troubleshooting configuration issues
-	 * 
+	 *
 	 * @returns Diagnostic information about the EnvConfig
 	 */
 	public static getDiagnostics(): Record<string, any> {
@@ -103,13 +123,38 @@ export class EnvConfig {
 			}
 		}
 
-		const env = this.getInstance().env!
+		// Use try-catch to safely check for required variables without throwing
+		let hasClientId = false
+		let hasClientSecret = false
+		let hasCookieEncryptionKey = false
+		let hasOAuthKV = false
+
+		try {
+			hasClientId = !!this.SCHWAB_CLIENT_ID
+		} catch (e) {
+			logger.error('Error getting SCHWAB_CLIENT_ID', e)
+		}
+
+		try {
+			hasClientSecret = !!this.SCHWAB_CLIENT_SECRET
+		} catch (e) {
+			logger.error('Error getting SCHWAB_CLIENT_SECRET', e)
+		}
+
+		try {
+			hasCookieEncryptionKey = !!this.COOKIE_ENCRYPTION_KEY
+		} catch (e) {
+			logger.error('Error getting COOKIE_ENCRYPTION_KEY', e)
+		}
+
+		hasOAuthKV = !!this.OAUTH_KV
+
 		return {
 			initialized: true,
-			hasClientId: !!env.SCHWAB_CLIENT_ID,
-			hasClientSecret: !!env.SCHWAB_CLIENT_SECRET,
-			hasCookieEncryptionKey: !!env.COOKIE_ENCRYPTION_KEY,
-			hasOAuthKV: !!env.OAUTH_KV,
+			hasClientId,
+			hasClientSecret,
+			hasCookieEncryptionKey,
+			hasOAuthKV,
 		}
 	}
 }
