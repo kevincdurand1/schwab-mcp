@@ -55,12 +55,9 @@ export class EnvConfig {
 		value: string | undefined,
 	): string {
 		if (!value) {
-			logger.error(
-				`Required environment variable ${variableName} is missing or empty`,
-			)
-			throw new Error(
-				`Required environment variable ${variableName} is missing or empty`,
-			)
+			const errorMessage = `Required environment variable ${variableName} is missing or empty`
+			logger.error(errorMessage)
+			throw new Error(errorMessage)
 		}
 		return value
 	}
@@ -123,38 +120,60 @@ export class EnvConfig {
 			}
 		}
 
-		// Use try-catch to safely check for required variables without throwing
-		let hasClientId = false
-		let hasClientSecret = false
-		let hasCookieEncryptionKey = false
-		let hasOAuthKV = false
-
-		try {
-			hasClientId = !!this.SCHWAB_CLIENT_ID
-		} catch (e) {
-			logger.error('Error getting SCHWAB_CLIENT_ID', e)
+		// Define a properly typed diagnostics object
+		interface EnvDiagnostics {
+			initialized: boolean
+			hasSCHWAB_CLIENT_ID?: boolean
+			hasSCHWAB_CLIENT_SECRET?: boolean
+			hasCOOKIE_ENCRYPTION_KEY?: boolean
+			hasOAuthKV: boolean
+			missingVars: string[]
 		}
 
-		try {
-			hasClientSecret = !!this.SCHWAB_CLIENT_SECRET
-		} catch (e) {
-			logger.error('Error getting SCHWAB_CLIENT_SECRET', e)
-		}
-
-		try {
-			hasCookieEncryptionKey = !!this.COOKIE_ENCRYPTION_KEY
-		} catch (e) {
-			logger.error('Error getting COOKIE_ENCRYPTION_KEY', e)
-		}
-
-		hasOAuthKV = !!this.OAUTH_KV
-
-		return {
+		// Check required variables safely without excessive logging
+		const diagnostics: EnvDiagnostics = {
 			initialized: true,
-			hasClientId,
-			hasClientSecret,
-			hasCookieEncryptionKey,
-			hasOAuthKV,
+			hasOAuthKV: false,
+			missingVars: [],
 		}
+
+		// Required variables
+		const requiredVars = [
+			{ name: 'SCHWAB_CLIENT_ID', accessor: () => this.SCHWAB_CLIENT_ID },
+			{
+				name: 'SCHWAB_CLIENT_SECRET',
+				accessor: () => this.SCHWAB_CLIENT_SECRET,
+			},
+			{
+				name: 'COOKIE_ENCRYPTION_KEY',
+				accessor: () => this.COOKIE_ENCRYPTION_KEY,
+			},
+		]
+
+		// Check each required variable
+		for (const v of requiredVars) {
+			try {
+				const value = v.accessor()
+				// Use type assertion to safely set dynamic property
+				;(diagnostics as Record<string, any>)[`has${v.name}`] = !!value
+			} catch (e) {
+				// Use type assertion to safely set dynamic property
+				;(diagnostics as Record<string, any>)[`has${v.name}`] = false
+				diagnostics.missingVars.push(v.name)
+				console.error(`Missing required environment variable: ${v.name}, ${e}`)
+			}
+		}
+
+		// Optional variables
+		diagnostics.hasOAuthKV = !!this.OAUTH_KV
+
+		// If any required variables are missing, log once with all missing variables
+		if (diagnostics.missingVars.length > 0) {
+			logger.error(
+				`Missing required environment variables: ${diagnostics.missingVars.join(', ')}`,
+			)
+		}
+
+		return diagnostics
 	}
 }

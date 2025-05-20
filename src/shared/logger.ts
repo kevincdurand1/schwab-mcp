@@ -72,34 +72,64 @@ function sanitizeLogData(data: any): any {
  * @param level The log level
  * @param message The log message
  * @param data Optional data to include with the log
+ * @param contextId Optional correlation/context ID for tracing related logs
  */
-function log(level: LogLevel, message: string, data?: any) {
+function log(level: LogLevel, message: string, data?: any, contextId?: string) {
 	if (level < currentLogLevel) return
 
 	const sanitizedData = data ? sanitizeLogData(data) : undefined
 	const timestamp = new Date().toISOString()
 	const levelName = LogLevel[level]
+	const contextPrefix = contextId ? `[${contextId}] ` : ''
 
 	switch (level) {
 		case LogLevel.DEBUG:
-			console.debug(`[${timestamp}] [${levelName}] ${message}`, sanitizedData)
+			console.debug(
+				`[${timestamp}] [${levelName}] ${contextPrefix}${message}`,
+				sanitizedData,
+			)
 			break
 		case LogLevel.INFO:
-			console.info(`[${timestamp}] [${levelName}] ${message}`, sanitizedData)
+			console.info(
+				`[${timestamp}] [${levelName}] ${contextPrefix}${message}`,
+				sanitizedData,
+			)
 			break
 		case LogLevel.WARN:
-			console.warn(`[${timestamp}] [${levelName}] ${message}`, sanitizedData)
+			console.warn(
+				`[${timestamp}] [${levelName}] ${contextPrefix}${message}`,
+				sanitizedData,
+			)
 			break
 		case LogLevel.ERROR:
-			console.error(`[${timestamp}] [${levelName}] ${message}`, sanitizedData)
+			console.error(
+				`[${timestamp}] [${levelName}] ${contextPrefix}${message}`,
+				sanitizedData,
+			)
 			break
 	}
 }
 
 // Public API
 export const logger = {
-	debug: (message: string, data?: any) => log(LogLevel.DEBUG, message, data),
-	info: (message: string, data?: any) => log(LogLevel.INFO, message, data),
-	warn: (message: string, data?: any) => log(LogLevel.WARN, message, data),
-	error: (message: string, data?: any) => log(LogLevel.ERROR, message, data),
+	debug: (message: string, data?: any, contextId?: string) =>
+		log(LogLevel.DEBUG, message, data, contextId),
+	info: (message: string, data?: any, contextId?: string) =>
+		log(LogLevel.INFO, message, data, contextId),
+	warn: (message: string, data?: any, contextId?: string) =>
+		log(LogLevel.WARN, message, data, contextId),
+	error: (message: string, data?: any, contextId?: string) =>
+		log(LogLevel.ERROR, message, data, contextId),
+
+	// Helper to create a context-aware logger that automatically includes the contextId
+	withContext: (contextId: string) => ({
+		debug: (message: string, data?: any) =>
+			log(LogLevel.DEBUG, message, data, contextId),
+		info: (message: string, data?: any) =>
+			log(LogLevel.INFO, message, data, contextId),
+		warn: (message: string, data?: any) =>
+			log(LogLevel.WARN, message, data, contextId),
+		error: (message: string, data?: any) =>
+			log(LogLevel.ERROR, message, data, contextId),
+	}),
 }

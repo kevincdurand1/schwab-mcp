@@ -12,12 +12,9 @@ import {
 	redirectToSchwab,
 	type CodeFlowTokenData,
 } from './client'
-import {
-	clientIdAlreadyApproved,
-	parseRedirectApproval,
-	renderApprovalDialog,
-} from './cookies'
+import { clientIdAlreadyApproved, parseRedirectApproval } from './cookies'
 import { AuthError, formatAuthError } from './errorMessages'
+import { renderApprovalDialog } from './ui'
 
 // Create Hono app with appropriate bindings
 const app = new Hono<{ Bindings: Env & { OAUTH_PROVIDER: OAuthHelpers } }>()

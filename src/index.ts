@@ -118,15 +118,27 @@ export class MyMCP extends DurableMCP<Props, Env> {
 
 				logger.info('Adding request/response interceptors for debugging')
 
+				// Generate a correlation ID for each request for better tracing
+				const generateCorrelationId = () => {
+					return `req-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
+				}
+
 				// Add request interceptor
 				axiosInstance.interceptors.request.use(
 					(config: any) => {
-						logger.info(
+						// Generate a correlation ID for this request
+						const correlationId = generateCorrelationId()
+						// Store it in the request config for the response interceptor
+						config.correlationId = correlationId
+
+						// Only log necessary information, not all headers which may contain sensitive data
+						logger.debug(
 							`API Request: ${config.method.toUpperCase()} ${config.url}`,
 							{
-								headers: config.headers,
 								baseURL: config.baseURL,
+								contentType: config.headers?.['Content-Type'],
 							},
+							correlationId,
 						)
 						return config
 					},
@@ -139,28 +151,52 @@ export class MyMCP extends DurableMCP<Props, Env> {
 				// Add response interceptor
 				axiosInstance.interceptors.response.use(
 					(response: any) => {
-						logger.info(
+						// Get the correlation ID from the request config
+						const correlationId = response.config.correlationId
+
+						// Log successful responses at debug level with correlation ID
+						logger.debug(
 							`API Response: ${response.status} ${response.statusText}`,
 							{
 								url: response.config.url,
 								method: response.config.method.toUpperCase(),
-								data:
+								// Don't log actual data, just its type
+								dataType: typeof response.data,
+								dataSize:
 									typeof response.data === 'object'
-										? '(object)'
-										: response.data,
+										? Object.keys(response.data).length
+										: String(response.data).length,
 							},
+							correlationId,
 						)
 						return response
 					},
 					(error: any) => {
+						// Get the correlation ID from the request config if available
+						const correlationId = error.config?.correlationId
+
 						if (error.response) {
-							logger.error(`API Response Error: ${error.response.status}`, {
-								url: error.config?.url,
-								method: error.config?.method?.toUpperCase(),
-								data: error.response.data,
-							})
+							// Log error responses at error level with correlation ID
+							logger.error(
+								`API Response Error: ${error.response.status}`,
+								{
+									url: error.config?.url,
+									method: error.config?.method?.toUpperCase(),
+									// Only include essential error data, not full response
+									errorCode: error.response.data?.errorCode,
+									errorMessage: error.response.data?.message || error.message,
+								},
+								correlationId,
+							)
 						} else {
-							logger.error('API Error (no response)', { error })
+							logger.error(
+								'API Error (no response)',
+								{
+									errorMessage: error.message,
+									code: error.code,
+								},
+								correlationId,
+							)
 						}
 						return Promise.reject(error)
 					},
