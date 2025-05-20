@@ -166,49 +166,6 @@ export async function redirectToSchwab(
 		const redirectUri = getEnvironment().SCHWAB_REDIRECT_URI
 		const auth = initializeSchwabAuthClient(redirectUri)
 
-		/**
-		 * FUTURE ENHANCEMENT: PKCE Support
-		 * 
-		 * When EnhancedTokenManager supports PKCE, we should:
-		 * 
-		 * 1. Generate PKCE code challenge and verifier:
-		 *    - Generate random code_verifier
-		 *    - Hash and base64-encode to create code_challenge
-		 * 
-		 * 2. Store the code_verifier securely:
-		 *    - Short-lived HTTPOnly cookie 
-		 *    - Associated with state parameter
-		 *    - Only accessible during /callback 
-		 * 
-		 * 3. Pass parameters to getAuthorizationUrl:
-		 *    - Include code_challenge and code_challenge_method
-		 *    - They should be passed through to the Schwab authorization URL
-		 * 
-		 * 4. In the callback handler:
-		 *    - Retrieve the stored code_verifier
-		 *    - Pass it to auth.exchangeCode(code, { codeVerifier })
-		 *    - EnhancedTokenManager should include it in the token request
-		 *   
-		 * For reference, here's how the PKCE flow would work:
-		 * 
-		 * const codeVerifier = generateRandomString(128);
-		 * const codeChallenge = await generateCodeChallenge(codeVerifier);
-		 * 
-		 * // Store codeVerifier securely (e.g., in a cookie)
-		 * c.cookie('pkce_verifier', codeVerifier, {
-		 *   httpOnly: true,
-		 *   secure: true,
-		 *   path: '/auth/callback',
-		 *   maxAge: 300 // Short-lived (5 minutes)
-		 * });
-		 * 
-		 * const { authUrl } = auth.getAuthorizationUrl({
-		 *   state: btoa(JSON.stringify(oauthReqInfo)),
-		 *   codeChallenge: codeChallenge,
-		 *   codeChallengeMethod: 'S256'
-		 * });
-		 */
-
 		// Get the authorization URL with state parameter
 		// Properly pass state to EnhancedTokenManager's getAuthorizationUrl
 		const { authUrl } = auth.getAuthorizationUrl({
