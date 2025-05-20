@@ -1,6 +1,7 @@
 import { type TokenData } from '@sudowealth/schwab-api'
 import { logger } from '../shared/logger'
 import { type SchwabCodeFlowAuth } from './client'
+import { type ITokenManager } from './tokenInterface'
 
 // Token lifecycle event interface
 interface TokenLifecycleEvent {
@@ -10,12 +11,12 @@ interface TokenLifecycleEvent {
 	timestamp: number
 }
 
-export class TokenManager {
+export class TokenManager implements ITokenManager {
 	private tokenClient: SchwabCodeFlowAuth
-	private tokenData: TokenData | null = null
-	private initialized = false
+	tokenData: TokenData | null = null
+	initialized = false
 	// Track token lifecycle events
-	private tokenEvents: TokenLifecycleEvent[] = []
+	tokenEvents: TokenLifecycleEvent[] = []
 	// Store the last reconnection attempt time
 	private lastReconnectTime = 0
 

@@ -1,17 +1,16 @@
 import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { type SchwabApiClient } from '@sudowealth/schwab-api'
 import { type z } from 'zod'
-import { type TokenManager } from '../auth/tokenManager'
+import { type ITokenManager } from '../auth/tokenInterface'
 import { logger } from './logger'
 
 // Store a reference to the token manager
-type TokenManagerType = TokenManager
-let tokenManagerInstance: TokenManagerType | null = null
+let tokenManagerInstance: ITokenManager | null = null
 
 /**
  * Initialize the token manager used by tools
  */
-export function initializeTokenManager(manager: TokenManagerType) {
+export function initializeTokenManager(manager: ITokenManager) {
 	logger.info('Initializing tokenManager in toolBuilder')
 	tokenManagerInstance = manager
 }
@@ -58,17 +57,29 @@ function formatResponse(response: ToolResponse): any {
  * Creates a tool error response
  */
 export function toolError(
-	message: string | Error,
+	message: string | Error | unknown,
 	details?: Record<string, any>,
 ): ToolResponse {
-	const error = message instanceof Error ? message : new Error(message)
+	const error = message instanceof Error ? message : new Error(String(message))
+	logger.error('Tool error', { error, details })
 	return { success: false, error, details }
 }
 
 /**
  * Creates a tool success response
  */
-export function toolSuccess<T>(data: T, message?: string): ToolResponse<T> {
+export function toolSuccess<T>({
+	data,
+	message,
+	source,
+}: {
+	data: T
+	message?: string
+	source: string
+}): ToolResponse<T> {
+	const count = Array.isArray(data) ? data.length : 1
+	logger.debug(`Tool success: ${source}`, { data, count })
+
 	return {
 		success: true,
 		data,

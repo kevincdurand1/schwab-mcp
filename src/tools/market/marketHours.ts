@@ -9,17 +9,15 @@ export function registerMarketHoursTools(
 	client: SchwabApiClient,
 	server: McpServer,
 ) {
+	const name = 'getMarketHours'
 	createTool(client, server, {
-		name: 'getMarketHours',
+		name,
 		schema: client.schemas.GetMarketHoursRequestQueryParamsSchema,
 		handler: async (params, client) => {
 			try {
 				const { markets, date } = params
 
-				logger.info('[getMarketHours] Fetching market hours', {
-					markets: markets.join(','),
-					date,
-				})
+				logger.info(`[${name}] Fetching market hours`, params)
 
 				const hours = await client.marketData.marketHours.getMarketHours({
 					queryParams: {
@@ -28,28 +26,16 @@ export function registerMarketHoursTools(
 					},
 				})
 
-				if (Object.keys(hours).length === 0) {
-					return toolSuccess(
-						[],
-						'No market hours found for the specified criteria.',
-					)
-				}
-
-				logger.debug('[getMarketHours] Successfully fetched market hours', {
-					marketCount: Object.keys(hours).length,
+				return toolSuccess({
+					data: hours,
+					message:
+						Object.keys(hours).length === 0
+							? 'No market hours found for the specified criteria.'
+							: 'Successfully fetched market hours',
+					source: 'getMarketHours',
 				})
-
-				return toolSuccess(hours, 'Successfully fetched market hours')
 			} catch (error) {
-				logger.error('[getMarketHours] Error fetching market hours', {
-					error,
-				})
-				return toolError(
-					error instanceof Error
-						? error
-						: new Error('Unknown error fetching market hours'),
-					{ source: 'getMarketHours' },
-				)
+				return toolError(error, { source: 'getMarketHours' })
 			}
 		},
 	})
@@ -76,36 +62,18 @@ export function registerMarketHoursTools(
 						queryParams: { date },
 					})
 
-				if (!hours) {
-					return toolSuccess(
-						[],
-						`No market hours found for market ID: ${market_id} ${date ? `on date: ${date}` : ''}.`,
-					)
-				}
-
-				logger.debug(
-					'[getMarketHoursByMarketId] Successfully fetched market hours',
-					{
-						market_id,
-					},
-				)
-
-				return toolSuccess(
-					hours,
-					`Successfully fetched market hours for ${market_id}`,
-				)
-			} catch (error) {
-				const marketId = params.market_id
-				logger.error('[getMarketHoursByMarketId] Error fetching market hours', {
-					error,
-					marketId,
+				return toolSuccess({
+					data: hours,
+					message: hours
+						? `Successfully fetched market hours for ${market_id}`
+						: `No market hours found for market ID: ${market_id}`,
+					source: 'getMarketHoursByMarketId',
 				})
-				return toolError(
-					error instanceof Error
-						? error
-						: new Error('Unknown error fetching market hours'),
-					{ source: 'getMarketHoursByMarketId', marketId },
-				)
+			} catch (error) {
+				return toolError(error, {
+					source: 'getMarketHoursByMarketId',
+					marketId: params.market_id,
+				})
 			}
 		},
 	})

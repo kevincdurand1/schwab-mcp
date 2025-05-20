@@ -8,7 +8,9 @@ import {
 	type SchwabCodeFlowAuth,
 	initializeSchwabAuthClient,
 } from './auth/client'
+import { type ITokenManager } from './auth/tokenInterface'
 import { TokenManager } from './auth/tokenManager'
+import { TokenStateMachine } from './auth/tokenStateMachine'
 import { logger } from './shared/logger'
 import { initializeTokenManager as initializeToolTokenManager } from './shared/toolBuilder'
 import { initializeTokenManager as initializeUtilTokenManager } from './shared/utils'
@@ -34,8 +36,9 @@ type Props = {
 
 export class MyMCP extends DurableMCP<Props, Env> {
 	private tokenManager!: SchwabCodeFlowAuth
-	private centralTokenManager!: TokenManager
+	private centralTokenManager!: ITokenManager
 	private client!: SchwabApiClient
+	private useStateMachine = true // Flag to control which implementation to use
 
 	server = new McpServer({
 		name: 'Schwab MCP',
@@ -91,8 +94,14 @@ export class MyMCP extends DurableMCP<Props, Env> {
 					saveToken,
 				)
 
-				// Create centralized token manager and make it available to utilities
-				this.centralTokenManager = new TokenManager(this.tokenManager)
+				// Create centralized token manager based on selection
+				if (this.useStateMachine) {
+					logger.info('Using TokenStateMachine for token management')
+					this.centralTokenManager = new TokenStateMachine(this.tokenManager)
+				} else {
+					logger.info('Using TokenManager for token management')
+					this.centralTokenManager = new TokenManager(this.tokenManager)
+				}
 
 				// Initialize both token managers with the same instance
 				logger.info('Initializing token managers')
@@ -234,6 +243,29 @@ export class MyMCP extends DurableMCP<Props, Env> {
 		logger.info('SSE connection established or reconnected')
 		await this.onReconnect()
 		return await super.onSSE(event)
+	}
+
+	// Get token diagnostics (only available with TokenStateMachine)
+	getDiagnostics() {
+		if (
+			this.useStateMachine &&
+			this.centralTokenManager instanceof TokenStateMachine
+		) {
+			return this.centralTokenManager.getDiagnostics()
+		}
+
+		if (this.centralTokenManager instanceof TokenManager) {
+			return this.centralTokenManager.getTokenDiagnostics()
+		}
+
+		// Simple diagnostics if neither specific type is available
+		return {
+			hasTokenManager: !!this.centralTokenManager,
+			hasTokenClient: !!this.tokenManager,
+			implementationType: this.useStateMachine
+				? 'TokenStateMachine'
+				: 'TokenManager',
+		}
 	}
 }
 

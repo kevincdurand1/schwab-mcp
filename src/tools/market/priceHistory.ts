@@ -32,37 +32,21 @@ export function registerPriceHistoryTools(
 					},
 				})
 
-				if (
-					history.empty ||
-					!history.candles ||
-					history.candles.length === 0
-				) {
-					return toolSuccess(
-						[],
-						`No price history found for symbol: ${params.symbol} with the given parameters.`
-					)
-				}
+				const noHistory =
+					history.empty || !history.candles || history.candles.length === 0
 
-				logger.debug('[getPriceHistory] Successfully fetched price history', {
-					symbol: params.symbol,
-					candleCount: history.candles?.length || 0,
+				return toolSuccess({
+					data: history,
+					message: noHistory
+						? `No price history found for symbol: ${params.symbol} with the given parameters.`
+						: `Successfully fetched price history for ${params.symbol}`,
+					source: 'getPriceHistory',
 				})
-
-				return toolSuccess(
-					history,
-					`Successfully fetched price history for ${params.symbol}`
-				)
 			} catch (error) {
-				logger.error('[getPriceHistory] Error fetching price history', {
-					error,
+				return toolError(error, {
+					source: 'getPriceHistory',
 					symbol: params.symbol,
 				})
-				return toolError(
-					error instanceof Error
-						? error
-						: new Error('Unknown error fetching price history'),
-					{ source: 'getPriceHistory', symbol: params.symbol }
-				)
 			}
 		},
 	})

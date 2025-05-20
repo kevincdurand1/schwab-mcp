@@ -22,33 +22,24 @@ export function registerOptionsTools(
 					},
 				})
 
-				if (!optionChain || optionChain.status !== 'SUCCESS') {
+				const noOptionChain = !optionChain || optionChain.status !== 'SUCCESS'
+				if (noOptionChain) {
 					return toolError(
 						`Could not fetch option chain for ${params.symbol}. Status: ${optionChain?.status}`,
-						{ symbol: params.symbol }
+						{ symbol: params.symbol },
 					)
 				}
 
-				logger.debug('[getOptionChain] Successfully fetched option chain', {
-					symbol: params.symbol,
-					status: optionChain.status,
+				return toolSuccess({
+					data: optionChain,
+					message: `Successfully fetched option chain for ${params.symbol}`,
+					source: 'getOptionChain',
 				})
-
-				return toolSuccess(
-					optionChain,
-					`Successfully fetched option chain for ${params.symbol}`
-				)
 			} catch (error) {
-				logger.error('[getOptionChain] Error fetching option chain', {
-					error,
+				return toolError(error, {
+					source: 'getOptionChain',
 					symbol: params.symbol,
 				})
-				return toolError(
-					error instanceof Error
-						? error
-						: new Error('Unknown error fetching option chain'),
-					{ source: 'getOptionChain', symbol: params.symbol }
-				)
 			}
 		},
 	})
@@ -72,32 +63,20 @@ export function registerOptionsTools(
 				if (!expirationChain) {
 					return toolError(
 						`Could not fetch option expiration chain for ${symbol}.`,
-						{ symbol }
+						{ symbol },
 					)
 				}
 
-				logger.debug(
-					'[getOptionExpirationChain] Successfully fetched expiration chain',
-					{
-						symbol,
-					},
-				)
-
-				return toolSuccess(
-					expirationChain,
-					`Successfully fetched option expiration chain for ${symbol}`
-				)
+				return toolSuccess({
+					data: expirationChain,
+					message: `Successfully fetched option expiration chain for ${symbol}`,
+					source: 'getOptionExpirationChain',
+				})
 			} catch (error) {
-				logger.error(
-					'[getOptionExpirationChain] Error fetching expiration chain',
-					{ error, symbol: params.symbol }
-				)
-				return toolError(
-					error instanceof Error
-						? error
-						: new Error('Unknown error fetching option expiration chain'),
-					{ source: 'getOptionExpirationChain', symbol: params.symbol }
-				)
+				return toolError(error, {
+					source: 'getOptionExpirationChain',
+					symbol: params.symbol,
+				})
 			}
 		},
 	})

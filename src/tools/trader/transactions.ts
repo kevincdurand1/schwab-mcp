@@ -12,10 +12,16 @@ export function registerTransactionTools(
 		schema: client.schemas.GetTransactionsRequestQueryParams,
 		handler: async ({ startDate, endDate, types, symbol }, client) => {
 			try {
+				logger.info('[getTransactions] Fetching accounts')
+
 				// First get all account numbers
 				const accounts = await client.trader.accounts.getAccountNumbers()
 				if (accounts.length === 0) {
-					return toolSuccess([], 'No Schwab accounts found.')
+					return toolSuccess({
+						data: [],
+						message: 'No Schwab accounts found.',
+						source: 'getTransactions',
+					})
 				}
 
 				logger.info('[getTransactions] Fetching transactions', {
@@ -45,34 +51,16 @@ export function registerTransactionTools(
 					transactions.push(...accountTransactions)
 				}
 
-				if (transactions.length === 0) {
-					return toolSuccess([], 'No Schwab transactions found.')
-				}
-
-				// Format the output
-				const transactionSummaries = transactions.map((trans: any) => ({
-					...trans,
-				}))
-
-				logger.debug(
-					'[getTransactions] Successfully fetched all transactions',
-					{
-						totalCount: transactions.length,
-					},
-				)
-
-				return toolSuccess(
-					transactionSummaries,
-					'Successfully fetched Schwab transactions'
-				)
+				return toolSuccess({
+					data: transactions,
+					message:
+						transactions.length === 0
+							? 'No Schwab transactions found.'
+							: 'Successfully fetched Schwab transactions',
+					source: 'getTransactions',
+				})
 			} catch (error) {
-				logger.error('[getTransactions] Error fetching transactions', { error })
-				return toolError(
-					error instanceof Error
-						? error
-						: new Error('Unknown error fetching transactions'),
-					{ source: 'getTransactions' }
-				)
+				return toolError(error, { source: 'getTransactions' })
 			}
 		},
 	})

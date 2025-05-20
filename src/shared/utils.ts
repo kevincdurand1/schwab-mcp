@@ -1,15 +1,15 @@
 import { type SchwabApiClient } from '@sudowealth/schwab-api'
 import { type z } from 'zod'
-import { type TokenManager } from '../auth/tokenManager'
+import { type ITokenManager } from '../auth/tokenInterface'
 import { formatError, formatSuccess } from './formatters'
 import { logger } from './logger'
 
 // Store a reference to the token manager
-let tokenManagerInstance: TokenManager | null = null
+let tokenManagerInstance: ITokenManager | null = null
 
 // Function to initialize the token manager reference
-export function initializeTokenManager(manager: TokenManager) {
-	logger.info('Initializing token manager')
+export function initializeTokenManager(manager: ITokenManager) {
+	logger.info('Initializing token manager in utils')
 	tokenManagerInstance = manager
 }
 /**
@@ -52,8 +52,8 @@ function toToolResponse(data: any): any {
 						text: data.data.message || 'Operation successful',
 					},
 					{
-						type: 'json',
-						data: data.data,
+						type: 'text',
+						text: JSON.stringify(data.data, null, 2),
 					},
 				],
 			}
@@ -75,7 +75,7 @@ function toToolResponse(data: any): any {
 
 	// Default case - wrap in content array
 	return {
-		content: [{ type: 'json', data }],
+		content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
 	}
 }
 
@@ -105,28 +105,31 @@ export function schwabTool<
 		try {
 			logger.info(`Invoking Schwab API with schema: ${schema.constructor.name}`)
 
-			// Validate token
-			const tokenValid = await ensureValidToken()
-			if (!tokenValid) {
-				return toToolResponse(
-					formatError(new Error('Authentication required'), {
-						reason: 'No valid access token',
-					}),
-				)
+			// Try to validate token but proceed anyway
+			try {
+				if (tokenManagerInstance) {
+					await tokenManagerInstance.ensureValidToken()
+				}
+			} catch (tokenError) {
+				logger.warn(`Token validation warning for schwabTool`, { tokenError })
+				// Continue execution even if token validation fails
 			}
 
 			// Validate input
-			const validationResult = schema.safeParse(args)
-			if (!validationResult.success) {
+			let parsedInput: z.infer<S>
+			try {
+				parsedInput = schema.parse(args)
+			} catch (validationError) {
+				logger.error(`Input validation error in schwabTool`, { validationError })
 				return toToolResponse(
 					formatError(new Error('Invalid input'), {
-						details: validationResult.error.format(),
+						details: validationError instanceof Error ? validationError.message : String(validationError),
 					}),
 				)
 			}
 
 			// Execute the handler with validated input
-			const result = await invoke(validationResult.data)
+			const result = await invoke(parsedInput)
 
 			// If result already has content array format, return directly
 			if (result && result.content && Array.isArray(result.content)) {

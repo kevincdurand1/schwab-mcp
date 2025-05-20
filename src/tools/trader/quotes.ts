@@ -20,33 +20,17 @@ export function registerQuotesTools(
 					queryParams: { symbols, fields, indicative },
 				})
 
-				if (Object.keys(quotesData).length === 0) {
-					return toolSuccess(
-						[],
-						`No quotes found for symbols: ${symbols}.`
-					)
-				}
+				const noQuotes = Object.keys(quotesData).length === 0
 
-				logger.debug('[getQuotes] Successfully fetched quotes', {
-					symbols,
-					count: Object.keys(quotesData).length,
+				return toolSuccess({
+					data: quotesData,
+					message: noQuotes
+						? `No quotes found for symbols: ${symbols}.`
+						: `Successfully fetched quotes for ${symbols}`,
+					source: 'getQuotes',
 				})
-
-				return toolSuccess(
-					quotesData,
-					`Successfully fetched quotes for ${symbols}`
-				)
 			} catch (error) {
-				logger.error('[getQuotes] Error fetching quotes', {
-					error,
-					symbols,
-				})
-				return toolError(
-					error instanceof Error
-						? error
-						: new Error('Unknown error fetching quotes'),
-					{ source: 'getQuotes', symbols }
-				)
+				return toolError(error, { source: 'getQuotes', symbols })
 			}
 		},
 	})
@@ -70,37 +54,21 @@ export function registerQuotesTools(
 					pathParams: { symbol_id },
 					queryParams: { fields },
 				})
-				// The response for a single symbol is also a map { symbol: quoteDetails }
-				if (
+
+				const noQuote =
 					!quoteData ||
 					Object.keys(quoteData).length === 0 ||
 					!quoteData[symbol_id.toUpperCase()]
-				) {
-					return toolSuccess(
-						{},
-						`No quote found for symbol: ${symbol_id}.`
-					)
-				}
 
-				logger.debug('[getQuoteBySymbolId] Successfully fetched quote', {
-					symbol_id,
+				return toolSuccess({
+					data: quoteData[symbol_id.toUpperCase()],
+					message: noQuote
+						? `No quote found for symbol: ${symbol_id}.`
+						: `Successfully fetched quote for ${symbol_id}`,
+					source: 'getQuoteBySymbolId',
 				})
-
-				return toolSuccess(
-					quoteData[symbol_id.toUpperCase()],
-					`Successfully fetched quote for ${symbol_id}`
-				)
 			} catch (error) {
-				logger.error('[getQuoteBySymbolId] Error fetching quote', {
-					error,
-					symbol_id,
-				})
-				return toolError(
-					error instanceof Error
-						? error
-						: new Error('Unknown error fetching quote'),
-					{ source: 'getQuoteBySymbolId', symbol_id }
-				)
+				return toolError(error, { source: 'getQuoteBySymbolId', symbol_id })
 			}
 		},
 	})

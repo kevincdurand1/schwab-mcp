@@ -30,33 +30,18 @@ export function registerMoversTools(
 					queryParams: { sort, frequency },
 				})
 
-				if (!movers || !movers.screeners || movers.screeners.length === 0) {
-					return toolSuccess(
-						[],
-						`No movers found for symbol: ${symbol_id}.`,
-					)
-				}
+				const noMovers =
+					!movers || !movers.screeners || movers.screeners.length === 0
 
-				logger.debug('[getMovers] Successfully fetched movers', {
-					symbol: symbol_id,
-					count: movers.screeners.length,
+				return toolSuccess({
+					data: movers.screeners,
+					message: noMovers
+						? `No movers found for symbol: ${symbol_id}.`
+						: `Successfully fetched movers for ${symbol_id}`,
+					source: 'getMovers',
 				})
-
-				return toolSuccess(
-					movers.screeners,
-					`Successfully fetched movers for ${symbol_id}`,
-				)
 			} catch (error) {
-				logger.error('[getMovers] Error fetching movers', {
-					error,
-					symbol_id,
-				})
-				return toolError(
-					error instanceof Error
-						? error
-						: new Error('Unknown error fetching movers'),
-					{ source: 'getMovers', symbol_id },
-				)
+				return toolError(error, { source: 'getMovers', symbol_id })
 			}
 		},
 	})

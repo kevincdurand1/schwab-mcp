@@ -24,24 +24,16 @@ export function registerAccountTools(
 					...acc.securitiesAccount,
 				}))
 
-				logger.debug('Successfully fetched accounts', {
-					count: accounts.length,
-				})
-
 				return toolSuccess({
-					accounts: accountSummaries,
-					count: accountSummaries.length,
-				}, accounts.length > 0
-					? 'Successfully fetched Schwab accounts'
-					: 'No Schwab accounts found')
+					data: accountSummaries,
+					message:
+						accounts.length > 0
+							? 'Successfully fetched Schwab accounts'
+							: 'No Schwab accounts found',
+					source: 'getAccounts',
+				})
 			} catch (error) {
-				logger.error('Error fetching accounts', { error })
-				return toolError(
-					error instanceof Error
-						? error
-						: new Error('Unknown error fetching accounts'),
-					{ source: 'getAccounts' }
-				)
+				return toolError(error, { source: 'getAccounts' })
 			}
 		},
 	})
@@ -54,24 +46,16 @@ export function registerAccountTools(
 				logger.info('Fetching account numbers')
 				const accounts = await client.trader.accounts.getAccountNumbers()
 
-				logger.debug('Successfully fetched account numbers', {
-					count: accounts.length,
-				})
-
 				return toolSuccess({
-					accounts,
-					count: accounts.length,
-				}, accounts.length > 0
-					? 'Successfully fetched Schwab accounts'
-					: 'No Schwab accounts found')
+					data: accounts,
+					message:
+						accounts.length > 0
+							? 'Successfully fetched Schwab accounts'
+							: 'No Schwab accounts found',
+					source: 'getAccountNumbers',
+				})
 			} catch (error) {
-				logger.error('Error fetching account numbers', { error })
-				return toolError(
-					error instanceof Error
-						? error
-						: new Error('Unknown error fetching account numbers'),
-					{ source: 'getAccountNumbers' }
-				)
+				return toolError(error, { source: 'getAccountNumbers' })
 			}
 		},
 	})

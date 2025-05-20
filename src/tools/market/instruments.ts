@@ -21,41 +21,20 @@ export function registerInstrumentTools(
 					queryParams: { symbol, projection },
 				})
 
-				if (
-					!instruments ||
-					(Array.isArray(instruments) && instruments.length === 0)
-				) {
-					return toolSuccess(
-						[],
-						`No instruments found for symbol: ${symbol} with projection: ${projection}.`,
-					)
-				}
-
-				const instrumentCount = Array.isArray(instruments)
-					? instruments.length
-					: 1
-				logger.debug('[searchInstruments] Successfully fetched instruments', {
-					symbol,
-					count: instrumentCount,
+				return toolSuccess({
+					source: 'searchInstruments',
+					data: instruments,
+					message:
+						Array.isArray(instruments) && instruments.length > 0
+							? `Successfully fetched instruments for symbol: ${symbol}`
+							: `No instruments found for symbol: ${symbol} with projection: ${projection}.`,
 				})
-
-				return toolSuccess(
-					instruments,
-					`Successfully fetched instruments for symbol: ${symbol}`,
-				)
 			} catch (error) {
-				logger.error('[searchInstruments] Error fetching instruments', {
-					error,
+				return toolError(error, {
+					source: 'searchInstruments',
 					symbol,
 					projection,
 				})
-
-				return toolError(
-					error instanceof Error
-						? error
-						: new Error('Unknown error fetching instruments'),
-					{ source: 'searchInstruments', symbol, projection },
-				)
 			}
 		},
 	})
