@@ -8,20 +8,20 @@ let cachedConfig: ValidatedEnv | undefined
  * Should be called from the Worker `setup()` phase.
  */
 export function initConfig(env: Env): ValidatedEnv {
-        if (!cachedConfig) {
-                cachedConfig = buildConfig(env)
-        }
-        return cachedConfig
+	if (!cachedConfig) {
+		cachedConfig = buildConfig(env)
+	}
+	return cachedConfig
 }
 
 /**
  * Retrieve the previously initialised configuration.
  */
 export function getConfig(): ValidatedEnv {
-        if (!cachedConfig) {
-                throw new Error('Config has not been initialised')
-        }
-        return cachedConfig
+	if (!cachedConfig) {
+		throw new Error('Config has not been initialised')
+	}
+	return cachedConfig
 }
 
 export { buildConfig }
