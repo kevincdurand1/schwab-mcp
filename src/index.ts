@@ -8,9 +8,9 @@ import {
 	type TokenData,
 } from '@sudowealth/schwab-api'
 import { DurableMCP } from 'workers-mcp'
-import { type ValidatedEnv } from '../types/env'
+import { type ValidatedEnv, type Env } from '../types/env'
 import { SchwabHandler, initializeSchwabAuthClient } from './auth'
-import { buildConfig } from './config'
+import { initConfig, getConfig } from './config'
 import { logger, makeLogger } from './shared/logger'
 import { registerMarketTools, registerTraderTools } from './tools'
 // Align MyMCPProps with schwab-api's TokenSet for consistency
@@ -27,11 +27,10 @@ export class MyMCP extends DurableMCP<MyMCPProps, Env> {
 	})
 
 	async init() {
-		try {
-			logger.info('[MyMCP.init] STEP 0: Start')
-			this.validatedConfig = buildConfig(this.env)
-			makeLogger(this.validatedConfig.LOG_LEVEL ?? 'INFO')
-			const redirectUri = this.validatedConfig.SCHWAB_REDIRECT_URI
+                try {
+                        logger.info('[MyMCP.init] STEP 0: Start')
+                        this.validatedConfig = getConfig()
+                        const redirectUri = this.validatedConfig.SCHWAB_REDIRECT_URI
 			logger.info('[MyMCP.init] STEP 1: Env initialized.')
 
 			// Use schwab-api's TokenSet for the function signatures
@@ -245,8 +244,8 @@ export class MyMCP extends DurableMCP<MyMCPProps, Env> {
 				? this.tokenManager.constructor.name
 				: 'undefined',
 		}
-		try {
-			const env = this.validatedConfig ?? buildConfig(this.env)
+                try {
+                        const env = this.validatedConfig ?? getConfig()
 			diagnosticInfo.environment = {
 				hasClientId: !!env.SCHWAB_CLIENT_ID,
 				hasClientSecret: !!env.SCHWAB_CLIENT_SECRET,
@@ -303,11 +302,21 @@ export class MyMCP extends DurableMCP<MyMCPProps, Env> {
 	}
 }
 
-export default new OAuthProvider({
-	apiRoute: '/sse',
-	apiHandler: MyMCP.mount('/sse') as any, // Cast remains due to library typing
-	defaultHandler: SchwabHandler as any, // Cast remains
-	authorizeEndpoint: '/authorize',
-	tokenEndpoint: '/token',
-	clientRegistrationEndpoint: '/register',
+const provider = new OAuthProvider({
+        apiRoute: '/sse',
+        apiHandler: MyMCP.mount('/sse') as any, // Cast remains due to library typing
+        defaultHandler: SchwabHandler as any, // Cast remains
+        authorizeEndpoint: '/authorize',
+        tokenEndpoint: '/token',
+        clientRegistrationEndpoint: '/register',
 })
+
+export default {
+        setup(env: Env) {
+                const config = initConfig(env)
+                makeLogger(config.LOG_LEVEL ?? 'INFO')
+        },
+        fetch(request: Request, env: Env, ctx: ExecutionContext) {
+                return provider.fetch(request, env, ctx)
+        },
+}

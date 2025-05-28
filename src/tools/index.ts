@@ -1,5 +1,3 @@
-// Market tools
-export * from './market'
-
-// Trader tools
-export * from './trader'
+// Re-export stable tool registration functions only
+export { registerMarketTools } from './market'
+export { registerTraderTools } from './trader'

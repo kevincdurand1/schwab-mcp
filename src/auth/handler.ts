@@ -7,7 +7,7 @@ import {
 } from '@sudowealth/schwab-api'
 import { Hono } from 'hono'
 import { type Env } from '../../types/env'
-import { buildConfig } from '../config'
+import { getConfig } from '../config'
 import { logger } from '../shared/logger'
 import { initializeSchwabAuthClient, redirectToSchwab } from './client'
 import { clientIdAlreadyApproved, parseRedirectApproval } from './cookies'
@@ -42,8 +42,8 @@ const app = new Hono<{ Bindings: Env & { OAUTH_PROVIDER: OAuthHelpers } }>()
  * 2. Shows an approval dialog if not approved
  */
 app.get('/authorize', async (c) => {
-	try {
-		const config = buildConfig(c.env)
+        try {
+                const config = getConfig()
 		const oauthReqInfo = await c.env.OAUTH_PROVIDER.parseAuthRequest(c.req.raw)
 		const { clientId } = oauthReqInfo
 
@@ -92,8 +92,8 @@ app.get('/authorize', async (c) => {
  * and redirects to Schwab for authentication
  */
 app.post('/authorize', async (c) => {
-	try {
-		const config = buildConfig(c.env)
+        try {
+                const config = getConfig()
 		const { state, headers } = await parseRedirectApproval(c.req.raw, config)
 
 		if (!state.oauthReqInfo) {
@@ -143,8 +143,8 @@ app.post('/authorize', async (c) => {
  * authorization flow.
  */
 app.get('/callback', async (c) => {
-	try {
-		const config = buildConfig(c.env)
+        try {
+                const config = getConfig()
 		// Extract state and code from query parameters
 		const stateParam = c.req.query('state')
 		const code = c.req.query('code')
