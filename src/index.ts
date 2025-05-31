@@ -11,6 +11,7 @@ import { DurableMCP } from 'workers-mcp'
 import { type ValidatedEnv } from '../types/env'
 import { SchwabHandler, initializeSchwabAuthClient } from './auth'
 import { buildConfig } from './config'
+import { gatherDiagnostics } from './shared/diagnostics'
 import { makeKvTokenStore, type TokenIdentifiers } from './shared/kvTokenStore'
 import { logger, makeLogger } from './shared/logger'
 import { registerMarketTools, registerTraderTools } from './tools'
@@ -317,95 +318,16 @@ export class MyMCP extends DurableMCP<MyMCPProps, Env> {
 	}
 
 	async getDiagnostics() {
-		logger.info('Gathering diagnostic information')
-		const diagnosticInfo: Record<string, any> = {
-			timestamp: new Date().toISOString(),
-			hasTokenManager: !!this.tokenManager,
-			hasClient: !!this.client,
-			implementationType: this.tokenManager
-				? this.tokenManager.constructor.name
-				: 'undefined',
-		}
-		try {
-			const env = this.validatedConfig ?? buildConfig(this.env)
-			diagnosticInfo.environment = {
-				hasClientId: !!env.SCHWAB_CLIENT_ID,
-				hasClientSecret: !!env.SCHWAB_CLIENT_SECRET,
-				hasRedirectUri: !!env.SCHWAB_REDIRECT_URI,
-				hasCookieKey: !!env.COOKIE_ENCRYPTION_KEY,
-				hasOAuthKV: !!env.OAUTH_KV,
-			}
-
-			// Add KV token diagnostics
-			if (env.OAUTH_KV && this.props) {
-				const kvToken = makeKvTokenStore(env.OAUTH_KV)
-				const tokenIds = {
-					schwabUserId: this.props.schwabUserId,
-					clientId: this.props.clientId,
-				}
-
-				try {
-					const kvTokenData = await kvToken.load(tokenIds)
-					diagnosticInfo.kvTokenStatus = {
-						hasTokenInKV: !!kvTokenData,
-						tokenKey: kvToken.kvKey(tokenIds),
-						hasAccessToken: !!kvTokenData?.accessToken,
-						hasRefreshToken: !!kvTokenData?.refreshToken,
-						expiresAt: kvTokenData?.expiresAt
-							? new Date(kvTokenData.expiresAt).toISOString()
-							: undefined,
-					}
-				} catch (kvError) {
-					diagnosticInfo.kvTokenError =
-						kvError instanceof Error ? kvError.message : String(kvError)
-				}
-			}
-		} catch (envError) {
-			diagnosticInfo.environmentError =
-				envError instanceof Error ? envError.message : String(envError)
-		}
-
-		if (this.tokenManager) {
-			try {
-				// Get diagnostics from EnhancedTokenManager
-				if (typeof this.tokenManager.getDiagnostics === 'function') {
-					diagnosticInfo.tokenManagerDiagnostics =
-						await this.tokenManager.getDiagnostics()
-
-					// Extract high-level token status summary if available
-					const diag = diagnosticInfo.tokenManagerDiagnostics
-					if (diag && typeof diag === 'object') {
-						diagnosticInfo.tokenStatus = {
-							hasValidAccessToken: !!(
-								diag.hasAccessToken && diag.expiresIn > 0
-							),
-							hasExpiredAccessToken: !!(
-								diag.hasAccessToken && diag.expiresIn <= 0
-							),
-							hasRefreshToken: !!diag.hasRefreshToken,
-							expiresInSeconds: diag.expiresIn,
-							lastTokenOperation: diag.lastTokenOperation,
-						}
-					}
-				} else if (
-					typeof this.tokenManager.generateTokenReport === 'function'
-				) {
-					diagnosticInfo.tokenManagerReport =
-						await this.tokenManager.generateTokenReport()
-				}
-			} catch (diagError) {
-				diagnosticInfo.tokenManagerDiagnosticError =
-					diagError instanceof Error ? diagError.message : String(diagError)
-			}
-		}
-
-		logger.info('Diagnostic information gathered', {
-			timestamp: diagnosticInfo.timestamp,
-			tokenStatusSummary: diagnosticInfo.tokenStatus
-				? `AccessToken: ${diagnosticInfo.tokenStatus.hasValidAccessToken ? 'Valid' : 'Invalid/Expired'}, RefreshToken: ${diagnosticInfo.tokenStatus.hasRefreshToken ? 'Present' : 'Missing'}`
-				: 'No token status available',
+		return gatherDiagnostics({
+			env: this.env,
+			validatedConfig: this.validatedConfig,
+			tokenManager: this.tokenManager,
+			client: this.client,
+			props: {
+				schwabUserId: this.props.schwabUserId,
+				clientId: this.props.clientId,
+			},
 		})
-		return diagnosticInfo
 	}
 }
 
