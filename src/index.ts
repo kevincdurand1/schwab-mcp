@@ -10,6 +10,7 @@ import {
 import { DurableMCP } from 'workers-mcp'
 import { type ValidatedEnv } from '../types/env'
 import { SchwabHandler, initializeSchwabAuthClient } from './auth'
+import { mapTokenPersistence } from './auth/tokenPersistence'
 import { buildConfig } from './config'
 import { makeKvTokenStore, type TokenIdentifiers } from './shared/kvTokenStore'
 import { logger, makeLogger } from './shared/logger'
@@ -125,11 +126,15 @@ export class MyMCP extends DurableMCP<MyMCPProps, Env> {
 				if (isDebug) {
 					logger.debug('[MyMCP.init] STEP 3A: Creating new ETM instance...')
 				}
+				const { load: mappedLoad, save: mappedSave } = mapTokenPersistence(
+					loadTokenForETM,
+					saveTokenForETM,
+				)
 				this.tokenManager = initializeSchwabAuthClient(
 					this.validatedConfig,
 					redirectUri,
-					loadTokenForETM,
-					saveTokenForETM,
+					mappedLoad,
+					mappedSave,
 				) // This is synchronous
 				if (isDebug) {
 					logger.debug('[MyMCP.init] STEP 3B: New ETM instance created.')

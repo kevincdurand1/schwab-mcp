@@ -2,7 +2,7 @@ import { type AuthRequest } from '@cloudflare/workers-oauth-provider'
 import { safeBase64Decode } from '@sudowealth/schwab-api'
 import { type ValidatedEnv } from '../../types/env'
 import { logger } from '../shared/logger'
-import { createAuthError } from './errors'
+import { createAuthError, AuthErrorKind } from './errors'
 
 /**
  * IMPORTANT: EnhancedTokenManager State Handling
@@ -28,6 +28,12 @@ export interface StateData {
 	userId?: string
 	oauthReqInfo?: AuthRequest
 	[key: string]: any
+}
+
+export interface StateEnvelope {
+	data: string
+	signature: string
+	version: 1
 }
 
 /**
@@ -110,13 +116,13 @@ export async function encodeStateWithIntegrity(
 		config.COOKIE_ENCRYPTION_KEY,
 	)
 
-	// Combine state and signature
-	const signedState = JSON.stringify({
+	const envelope: StateEnvelope = {
 		data: stateBase64,
-		signature: signature,
-	})
+		signature,
+		version: 1,
+	}
 
-	return btoa(signedState)
+	return btoa(JSON.stringify(envelope))
 }
 
 /**
@@ -143,12 +149,13 @@ export async function decodeAndVerifyState(
 		// Try to decode as our signed state format first
 		try {
 			const signedStateJson = safeBase64Decode(decodedParam)
-			const signedState = JSON.parse(signedStateJson) as {
-				data?: string
-				signature?: string
-			}
+			const signedState = JSON.parse(signedStateJson) as Partial<StateEnvelope>
 
-			if (signedState.data && signedState.signature) {
+			if (
+				signedState.version === 1 &&
+				signedState.data &&
+				signedState.signature
+			) {
 				// Verify HMAC signature
 				const isValid = await verifyHmacSignature(
 					signedState.data,
@@ -195,7 +202,7 @@ export function extractClientIdFromState(state: StateData): string {
 	const clientId = state.clientId || state.oauthReqInfo?.clientId
 
 	if (!clientId) {
-		throw createAuthError('ClientIdExtraction')
+		throw createAuthError(AuthErrorKind.ClientIdExtraction)
 	}
 
 	return clientId
