@@ -115,36 +115,56 @@ export class SchwabApiEndpoints {
   }
 
   /**
-   * Get option chains for a symbol
+   * Get option chains for a symbol - Complete Schwab API implementation
    */
   async getOptionChains(
     symbol: string,
     params: {
       contractType?: 'CALL' | 'PUT' | 'ALL';
       strikeCount?: number;
-      includeQuotes?: boolean;
-      strategy?: string;
+      includeUnderlyingQuote?: boolean;
+      strategy?: 'SINGLE' | 'ANALYTICAL' | 'COVERED' | 'VERTICAL' | 'CALENDAR' | 'STRANGLE' | 'STRADDLE' | 'BUTTERFLY' | 'CONDOR' | 'DIAGONAL' | 'COLLAR' | 'ROLL';
       interval?: number;
       strike?: number;
       range?: string;
-      fromDate?: string;
-      toDate?: string;
-      expMonth?: string;
+      fromDate?: string; // yyyy-MM-dd format
+      toDate?: string;   // yyyy-MM-dd format
+      volatility?: number;
+      underlyingPrice?: number;
+      interestRate?: number;
+      daysToExpiration?: number;
+      expMonth?: 'JAN' | 'FEB' | 'MAR' | 'APR' | 'MAY' | 'JUN' | 'JUL' | 'AUG' | 'SEP' | 'OCT' | 'NOV' | 'DEC' | 'ALL';
       optionType?: string;
+      entitlement?: 'PN' | 'NP' | 'PP';
     } = {}
   ): Promise<any> {
     const queryParams: any = { symbol };
+    
+    // Basic parameters
     if (params.contractType) queryParams.contractType = params.contractType;
     if (params.strikeCount !== undefined) queryParams.strikeCount = params.strikeCount;
-    if (params.includeQuotes !== undefined) queryParams.includeQuotes = params.includeQuotes;
+    if (params.includeUnderlyingQuote !== undefined) queryParams.includeUnderlyingQuote = params.includeUnderlyingQuote;
+    
+    // Strategy parameters
     if (params.strategy) queryParams.strategy = params.strategy;
     if (params.interval !== undefined) queryParams.interval = params.interval;
     if (params.strike !== undefined) queryParams.strike = params.strike;
     if (params.range) queryParams.range = params.range;
+    
+    // Date parameters (yyyy-MM-dd format)
     if (params.fromDate) queryParams.fromDate = params.fromDate;
     if (params.toDate) queryParams.toDate = params.toDate;
+    
+    // ANALYTICAL strategy parameters
+    if (params.volatility !== undefined) queryParams.volatility = params.volatility;
+    if (params.underlyingPrice !== undefined) queryParams.underlyingPrice = params.underlyingPrice;
+    if (params.interestRate !== undefined) queryParams.interestRate = params.interestRate;
+    if (params.daysToExpiration !== undefined) queryParams.daysToExpiration = params.daysToExpiration;
+    
+    // Expiration and type parameters
     if (params.expMonth) queryParams.expMonth = params.expMonth;
     if (params.optionType) queryParams.optionType = params.optionType;
+    if (params.entitlement) queryParams.entitlement = params.entitlement;
 
     const response = await this.client.get('/marketdata/v1/chains', queryParams);
     return response.data;

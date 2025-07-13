@@ -385,15 +385,20 @@ class SchwabMarketDataAPI implements MarketDataAPI {
       const response = await this.client.getOptionChains(params.symbol, {
         contractType: params.contractType,
         strikeCount: params.strikeCount,
-        includeQuotes: params.includeQuotes,
+        includeUnderlyingQuote: params.includeUnderlyingQuote,
         strategy: params.strategy,
         interval: params.interval,
         strike: params.strike,
         range: params.range,
         fromDate: params.fromDate,
         toDate: params.toDate,
+        volatility: params.volatility,
+        underlyingPrice: params.underlyingPrice,
+        interestRate: params.interestRate,
+        daysToExpiration: params.daysToExpiration,
         expMonth: params.expMonth,
-        optionType: params.optionType
+        optionType: params.optionType,
+        entitlement: params.entitlement
       });
       
       // Handle large option chain responses

@@ -6,10 +6,10 @@ const { createClient } = require('redis');
 
 const app = express();
 
-// OAuth config
-const CLIENT_ID = '0A33ilOe6rzQ0RxyFtyd42A3BWdEhyq5';
+// OAuth config from environment variables
+const CLIENT_ID = process.env.SCHWAB_CLIENT_ID;
 const CLIENT_SECRET = process.env.SCHWAB_CLIENT_SECRET;
-const REDIRECT_URI = 'https://127.0.0.1:5001/api/SchwabAuth/callback';
+const REDIRECT_URI = process.env.SCHWAB_REDIRECT_URI || 'https://127.0.0.1:5001/api/SchwabAuth/callback';
 
 // Initialize Redis client
 const redisClient = createClient({
@@ -57,8 +57,8 @@ app.get('/api/SchwabAuth/callback', async (req, res) => {
       redirectUri: REDIRECT_URI
     });
     
-    if (!CLIENT_SECRET) {
-      throw new Error('SCHWAB_CLIENT_SECRET not available in environment');
+    if (!CLIENT_SECRET || !CLIENT_ID) {
+      throw new Error('SCHWAB_CLIENT_ID and SCHWAB_CLIENT_SECRET must be set in environment variables');
     }
     
     const authHeader = `Basic ${Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64')}`;

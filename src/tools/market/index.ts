@@ -49,7 +49,23 @@ const GetMoversParamsSchema = z.object({
 })
 
 const GetOptionChainParamsSchema = z.object({
-	symbol: z.string().describe('Underlying symbol')
+	symbol: z.string().describe('Underlying symbol (e.g., AAPL)'),
+	contractType: z.enum(['CALL', 'PUT', 'ALL']).optional().describe('Contract type - CALL, PUT, or ALL'),
+	strikeCount: z.number().int().optional().describe('Number of strikes to return above/below ATM price'),
+	includeUnderlyingQuote: z.boolean().optional().describe('Include underlying quotes'),
+	strategy: z.enum(['SINGLE', 'ANALYTICAL', 'COVERED', 'VERTICAL', 'CALENDAR', 'STRANGLE', 'STRADDLE', 'BUTTERFLY', 'CONDOR', 'DIAGONAL', 'COLLAR', 'ROLL']).optional().describe('Option chain strategy (default: SINGLE)'),
+	interval: z.number().optional().describe('Strike interval for spread strategy chains'),
+	strike: z.number().optional().describe('Specific strike price'),
+	range: z.string().optional().describe('Range (ITM/NTM/OTM etc.)'),
+	fromDate: z.string().optional().describe('From date (yyyy-MM-dd format)'),
+	toDate: z.string().optional().describe('To date (yyyy-MM-dd format)'),
+	volatility: z.number().optional().describe('Volatility for ANALYTICAL strategy calculations'),
+	underlyingPrice: z.number().optional().describe('Underlying price for ANALYTICAL strategy calculations'),
+	interestRate: z.number().optional().describe('Interest rate for ANALYTICAL strategy calculations'),
+	daysToExpiration: z.number().int().optional().describe('Days to expiration for ANALYTICAL strategy calculations'),
+	expMonth: z.enum(['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC', 'ALL']).optional().describe('Expiration month'),
+	optionType: z.string().optional().describe('Option type'),
+	entitlement: z.enum(['PN', 'NP', 'PP']).optional().describe('Client entitlement (PN=NonPayingPro, NP=NonPro, PP=PayingPro)')
 })
 
 // Use console.error for logging to avoid polluting stdout (MCP communication channel)  
