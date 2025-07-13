@@ -1,338 +1,158 @@
-import OAuthProvider from '@cloudflare/workers-oauth-provider'
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import {
-	createApiClient,
-	sanitizeKeyForLog,
-	type SchwabApiClient,
-	type EnhancedTokenManager,
-	type SchwabApiLogger,
-	type TokenData,
-} from '@sudowealth/schwab-api'
-import { DurableMCP } from 'workers-mcp'
-import { type ValidatedEnv } from '../types/env'
-import { SchwabHandler, initializeSchwabAuthClient } from './auth'
-import { getConfig } from './config'
-import {
-	APP_NAME,
-	API_ENDPOINTS,
-	LOGGER_CONTEXTS,
-	TOOL_NAMES,
-	ENVIRONMENTS,
-	CONTENT_TYPES,
-	APP_SERVER_NAME,
-} from './shared/constants'
-import { makeKvTokenStore, type TokenIdentifiers } from './shared/kvTokenStore'
-import { logger, buildLogger, type PinoLogLevel } from './shared/log'
-import { logOnlyInDevelopment } from './shared/secureLogger'
-import { createTool, toolError, toolSuccess } from './shared/toolBuilder'
-import { allToolSpecs, type ToolSpec } from './tools'
+import 'dotenv/config';
+import { randomUUID } from 'crypto';
+import fs from 'fs';
+import { createServer } from 'https';
+import path from 'path';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import RedisStore from 'connect-redis';
+import express from 'express';
+import session from 'express-session';
+import { createClient } from 'redis';
+import { createOAuthHandler } from './auth/expressOAuth.js';
+import { CONSTANTS } from './shared/constants.js';
+import { createTokenStore } from './shared/redisTokenStore.js';
+import { registerTools } from './tools/register.js';
 
-/**
- * DO props now contain only IDs needed for token key derivation
- * Tokens are stored exclusively in KV to prevent divergence
- */
-type MyMCPProps = {
-	/** Schwab user ID when available (preferred for token key) */
-	schwabUserId?: string
-	/** OAuth client ID (fallback for token key) */
-	clientId?: string
+// Use console.error for logging to avoid polluting stdout (MCP communication channel)
+const log = {
+  info: (msg: string, data?: any) => console.error(`[INFO] ${msg}`, data || ''),
+  error: (msg: string, data?: any) => console.error(`[ERROR] ${msg}`, data || ''),
+};
+
+// Environment validation
+function validateEnvironment() {
+  const required = [
+    'SCHWAB_CLIENT_ID',
+    'SCHWAB_CLIENT_SECRET',
+    'SESSION_SECRET'
+  ];
+  
+  const missing = required.filter(key => !process.env[key]);
+  if (missing.length > 0) {
+    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
+  }
+  
+  log.info('Environment validation passed');
 }
 
-export class MyMCP extends DurableMCP<MyMCPProps, Env> {
-	private tokenManager!: EnhancedTokenManager
-	private client!: SchwabApiClient
-	private validatedConfig!: ValidatedEnv
-	private mcpLogger = logger.child(LOGGER_CONTEXTS.MCP_DO)
+async function main() {
+  // Validate environment first
+  validateEnvironment();
+  
+  const app = express();
+  const port = process.env.PORT || 3000;
 
-	server = new McpServer({
-		name: APP_NAME,
-		version: '0.0.1',
-	})
+  // Initialize Redis
+  const redisClient = createClient({
+    url: process.env.REDIS_URL || 'redis://127.0.0.1:6379'
+  });
+  
+  redisClient.on('error', (err) => log.error('Redis Client Error', err));
+  await redisClient.connect();
 
-	async init() {
-		try {
-			// Register a minimal tool synchronously to ensure Claude Desktop detects tools
-			this.server.tool(
-				TOOL_NAMES.STATUS,
-				'Check Schwab MCP server status',
-				{},
-				async () => ({
-					content: [
-						{
-							type: CONTENT_TYPES.TEXT,
-							text: `${APP_SERVER_NAME} is running. Use tool discovery to see all available tools.`,
-						},
-					],
-				}),
-			)
-			this.validatedConfig = getConfig(this.env)
-			// Initialize logger with configured level
-			const logLevel = this.validatedConfig.LOG_LEVEL as PinoLogLevel
-			const newLogger = buildLogger(logLevel)
-			// Replace the singleton logger instance
-			Object.assign(logger, newLogger)
-			const redirectUri = this.validatedConfig.SCHWAB_REDIRECT_URI
+  // Create token store
+  const tokenStore = createTokenStore(redisClient as any);
 
-			this.mcpLogger.debug('[MyMCP.init] STEP 0: Start')
-			this.mcpLogger.debug('[MyMCP.init] STEP 1: Env initialized.')
+  // Create MCP server FIRST - before any Express middleware
+  const mcpServer = new Server(
+    {
+      name: CONSTANTS.SERVER_NAME,
+      version: CONSTANTS.SERVER_VERSION,
+    },
+    {
+      capabilities: {
+        tools: {},
+      },
+    }
+  );
 
-			// Create KV token store - single source of truth
-			const kvToken = makeKvTokenStore(this.validatedConfig.OAUTH_KV)
+  // Register tools
+  await registerTools(mcpServer, tokenStore);
 
-			// Ensure clientId is stored in props for token key derivation
-			if (!this.props.clientId) {
-				this.props.clientId = this.validatedConfig.SCHWAB_CLIENT_ID
-				this.props = { ...this.props }
-			}
+  // Setup MCP transport
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
+  });
 
-			const getTokenIds = (): TokenIdentifiers => ({
-				schwabUserId: this.props.schwabUserId,
-				clientId: this.props.clientId,
-			})
+  // Connect MCP server to transport
+  await mcpServer.connect(transport);
 
-			// Debug token IDs during initialization
-			logOnlyInDevelopment(
-				this.mcpLogger,
-				'debug',
-				'[MyMCP.init] Token identifiers',
-				{
-					hasSchwabUserId: !!this.props.schwabUserId,
-					hasClientId: !!this.props.clientId,
-					expectedKeyPrefix: sanitizeKeyForLog(kvToken.kvKey(getTokenIds())),
-				},
-			)
+  // Create HTTPS server to handle MCP requests before Express
+  const httpsOptions = {
+          key: fs.readFileSync(path.join(process.cwd(), 'certs', '127.0.0.1-key.pem')),
+      cert: fs.readFileSync(path.join(process.cwd(), 'certs', '127.0.0.1.pem'))
+  };
 
-			// Token save function uses KV store exclusively
-			const saveTokenForETM = async (tokenSet: TokenData) => {
-				await kvToken.save(getTokenIds(), tokenSet)
-				this.mcpLogger.debug('ETM: Token save to KV complete', {
-					keyPrefix: sanitizeKeyForLog(kvToken.kvKey(getTokenIds())),
-				})
-			}
+  const httpServer = createServer(httpsOptions, async (req, res) => {
+    // Handle MCP requests directly
+    if (req.url === '/mcp' && req.method === 'POST') {
+      try {
+        await transport.handleRequest(req, res);
+      } catch (error) {
+        log.error('MCP transport error:', error);
+        if (!res.headersSent) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'MCP transport error' }));
+        }
+      }
+      return;
+    }
+    
+    // Pass all other requests to Express
+    app(req, res);
+  });
 
-			// Token load function uses KV store exclusively
-			const loadTokenForETM = async (): Promise<TokenData | null> => {
-				const tokenIds = getTokenIds()
-				this.mcpLogger.debug('[ETM Load] Attempting to load token', {
-					hasSchwabUserId: !!tokenIds.schwabUserId,
-					hasClientId: !!tokenIds.clientId,
-					expectedKeyPrefix: sanitizeKeyForLog(kvToken.kvKey(tokenIds)),
-				})
+  // Session configuration
+  const redisStore = new (RedisStore as any)({
+    client: redisClient,
+    prefix: 'schwab-mcp:sess:',
+    ttl: 7200 // 2 hours in seconds
+  });
+  
+  app.use(session({
+    store: redisStore,
+    secret: process.env.SESSION_SECRET || 'change-me-in-production',
+    resave: false,
+    saveUninitialized: true, // Ensure sessions are created
+    name: 'schwab-mcp-session', // Custom session name
+    cookie: {
+      secure: true, // Always use secure cookies for HTTPS
+      httpOnly: true,
+      maxAge: 1000 * 60 * 60 * 2, // 2 hours for OAuth flow
+      sameSite: 'lax' // OAuth compatibility
+    },
+    rolling: true, // Force session save
+    genid: function(req) {
+      return randomUUID(); // Use crypto.randomUUID for session IDs
+    }
+  }));
 
-				const tokenData = await kvToken.load(tokenIds)
-				this.mcpLogger.debug('ETM: Token load from KV complete', {
-					keyPrefix: sanitizeKeyForLog(kvToken.kvKey(tokenIds)),
-				})
-				return tokenData
-			}
+  // Parse JSON bodies for all endpoints (MCP is handled separately)
+  app.use(express.json());
 
-			this.mcpLogger.debug(
-				'[MyMCP.init] STEP 2: Storage and event handlers defined.',
-			)
+  // Health check
+  app.get('/health', (req, res) => {
+    res.json({ status: 'ok' });
+  });
 
-			// 1. Create ETM instance (synchronous)
-			const hadExistingTokenManager = !!this.tokenManager
-			this.mcpLogger.debug('[MyMCP.init] STEP 3A: ETM instance setup', {
-				hadExisting: hadExistingTokenManager,
-			})
-			if (!this.tokenManager) {
-				this.tokenManager = initializeSchwabAuthClient(
-					this.validatedConfig,
-					redirectUri,
-					loadTokenForETM,
-					saveTokenForETM,
-				) // This is synchronous
-			}
-			this.mcpLogger.debug('[MyMCP.init] STEP 3B: ETM instance ready', {
-				wasReused: hadExistingTokenManager,
-			})
+  // Setup OAuth routes
+  const oauthHandler = createOAuthHandler(tokenStore);
+  app.use('/auth', oauthHandler);
 
-			const mcpLogger: SchwabApiLogger = {
-				debug: (message: string, ...args: any[]) =>
-					this.mcpLogger.debug(message, args.length > 0 ? args[0] : undefined),
-				info: (message: string, ...args: any[]) =>
-					this.mcpLogger.info(message, args.length > 0 ? args[0] : undefined),
-				warn: (message: string, ...args: any[]) =>
-					this.mcpLogger.warn(message, args.length > 0 ? args[0] : undefined),
-				error: (message: string, ...args: any[]) =>
-					this.mcpLogger.error(message, args.length > 0 ? args[0] : undefined),
-			}
-			this.mcpLogger.debug('[MyMCP.init] STEP 4: MCP Logger adapted.')
+  // Error handling
+  mcpServer.onerror = (error) => {
+    log.error('MCP Server error:', error);
+  };
 
-			// 2. Proactively initialize ETM to load tokens BEFORE creating client
-			this.mcpLogger.debug(
-				'[MyMCP.init] STEP 5A: Proactively calling this.tokenManager.initialize() (async)...',
-			)
-			const etmInitSuccess = this.tokenManager.initialize()
-			this.mcpLogger.debug(
-				`[MyMCP.init] STEP 5B: Proactive ETM initialization complete. Success: ${etmInitSuccess}`,
-			)
-
-			// 2.5. Auto-migrate tokens if we have schwabUserId but token was loaded from clientId key
-			if (this.props.schwabUserId && this.props.clientId) {
-				await kvToken.migrateIfNeeded(
-					{ clientId: this.props.clientId },
-					{ schwabUserId: this.props.schwabUserId },
-				)
-				this.mcpLogger.debug('[MyMCP.init] STEP 5C: Token migration completed')
-			}
-
-			// 3. Create SchwabApiClient AFTER tokens are loaded
-			this.client = createApiClient({
-				config: {
-					environment: ENVIRONMENTS.PRODUCTION,
-					logger: mcpLogger,
-					enableLogging: true,
-					logLevel:
-						this.validatedConfig.ENVIRONMENT === 'production'
-							? 'error'
-							: 'debug',
-				},
-				auth: this.tokenManager,
-			})
-			this.mcpLogger.debug('[MyMCP.init] STEP 6: SchwabApiClient ready.')
-
-			// 4. Register tools (this.server.tool calls are synchronous)
-			this.mcpLogger.debug('[MyMCP.init] STEP 7A: Calling registerTools...')
-			allToolSpecs.forEach((spec: ToolSpec<any>) => {
-				createTool(this.client, this.server, {
-					name: spec.name,
-					description: spec.description,
-					schema: spec.schema,
-					handler: async (params, c) => {
-						try {
-							const data = await spec.call(c, params)
-							return toolSuccess({
-								data,
-								source: spec.name,
-								message: `Successfully executed ${spec.name}`,
-							})
-						} catch (error) {
-							return toolError(error, { source: spec.name })
-						}
-					},
-				})
-			})
-			this.mcpLogger.debug('[MyMCP.init] STEP 7B: registerTools completed.')
-			this.mcpLogger.debug(
-				'[MyMCP.init] STEP 8: MyMCP.init FINISHED SUCCESSFULLY',
-			)
-		} catch (error: any) {
-			this.mcpLogger.error(
-				'[MyMCP.init] FINAL CATCH: UNHANDLED EXCEPTION in init()',
-				{
-					error: error.message,
-					stack: error.stack,
-				},
-			)
-			throw error // Re-throw to ensure DO framework sees the failure
-		}
-	}
-
-	async onReconnect() {
-		this.mcpLogger.info('Handling reconnection in MyMCP instance')
-		try {
-			if (!this.tokenManager) {
-				this.mcpLogger.warn(
-					'Token manager not initialized, attempting full initialization',
-				)
-				await this.init()
-				return true
-			}
-			this.mcpLogger.info('Attempting reconnection via token manager')
-
-			try {
-				this.mcpLogger.info('Attempting to fetch access token as recovery test')
-				const token = await this.tokenManager.getAccessToken()
-				if (token) {
-					this.mcpLogger.info(
-						'Successfully retrieved access token during reconnection',
-					)
-					return true
-				}
-			} catch (tokenError) {
-				this.mcpLogger.warn('Failed to get access token during reconnection', {
-					error:
-						tokenError instanceof Error
-							? tokenError.message
-							: String(tokenError),
-				})
-			}
-
-			try {
-				this.mcpLogger.info(
-					'Attempting proactive reinitialization of token manager',
-				)
-				const initResult = await this.tokenManager.initialize()
-				this.mcpLogger.info(
-					`Token manager reinitialization ${initResult ? 'succeeded' : 'failed'}`,
-				)
-				if (initResult) {
-					return true
-				}
-			} catch (initError) {
-				this.mcpLogger.warn('Token manager reinitialization failed', {
-					error:
-						initError instanceof Error ? initError.message : String(initError),
-				})
-			}
-
-			try {
-				this.mcpLogger.info('Token manager state during reconnection', {
-					hasTokenManager: !!this.tokenManager,
-				})
-			} catch (stateError) {
-				this.mcpLogger.warn(
-					'Failed to check token manager state during reconnection',
-					{
-						error:
-							stateError instanceof Error
-								? stateError.message
-								: String(stateError),
-					},
-				)
-			}
-
-			this.mcpLogger.warn(
-				'Reconnection recovery attempts failed, performing full reinitialization',
-			)
-			await this.init()
-			return true
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error)
-			const stack = error instanceof Error ? error.stack : undefined
-			this.mcpLogger.error('Critical error during reconnection handling', {
-				error: message,
-				stack,
-			})
-			try {
-				this.mcpLogger.warn(
-					'Attempting emergency reinitialization after reconnection failure',
-				)
-				await this.init()
-				return true
-			} catch (initError) {
-				const initMessage =
-					initError instanceof Error ? initError.message : String(initError)
-				this.mcpLogger.error('Emergency reinitialization also failed', {
-					error: initMessage,
-				})
-				return false
-			}
-		}
-	}
-
-	async onSSE(event: any) {
-		this.mcpLogger.info('SSE connection established or reconnected')
-		await this.onReconnect()
-		return await super.onSSE(event)
-	}
+  // Start server
+  httpServer.listen(port, () => {
+    log.info(`Schwab MCP server running on HTTPS port ${port}`);
+    log.info(`OAuth callback URL: ${process.env.SCHWAB_REDIRECT_URI || 'https://127.0.0.1:5001/api/SchwabAuth/callback'}`);
+  });
 }
 
-export default new OAuthProvider({
-	apiRoute: API_ENDPOINTS.SSE,
-	apiHandler: MyMCP.mount(API_ENDPOINTS.SSE) as any, // Cast remains due to library typing
-	defaultHandler: SchwabHandler as any, // Cast remains
-	authorizeEndpoint: API_ENDPOINTS.AUTHORIZE,
-	tokenEndpoint: API_ENDPOINTS.TOKEN,
-})
+main().catch((error) => {
+  log.error('Failed to start server:', error);
+  process.exit(1);
+});

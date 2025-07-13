@@ -5,6 +5,14 @@ export const APP_NAME = 'Schwab MCP' as const
 export const APP_SERVER_NAME = 'Schwab MCP Server' as const
 
 /**
+ * Server Constants
+ */
+export const CONSTANTS = {
+	SERVER_NAME: 'schwab-mcp',
+	SERVER_VERSION: '1.0.0',
+} as const
+
+/**
  * Cookie Constants
  */
 export const COOKIE_NAMES = {

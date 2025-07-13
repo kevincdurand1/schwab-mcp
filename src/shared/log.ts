@@ -1,5 +1,5 @@
 /**
- * Lightweight Pino logger wrapper for Cloudflare Workers
+ * Lightweight Pino logger wrapper for Express.js
  * Provides structured logging with automatic secret redaction
  */
 
@@ -25,10 +25,11 @@ interface AppLogger {
 
 // Child logger interface
 interface ChildLogger {
-	debug: (message: string, data?: any, contextId?: string) => void
-	info: (message: string, data?: any, contextId?: string) => void
-	warn: (message: string, data?: any, contextId?: string) => void
-	error: (message: string, data?: any, contextId?: string) => void
+  debug: (message: string, data?: any, contextId?: string) => void
+  info: (message: string, data?: any, contextId?: string) => void
+  warn: (message: string, data?: any, contextId?: string) => void
+  error: (message: string, data?: any, contextId?: string) => void
+  child: (contextId: string) => ChildLogger
 }
 
 // Redaction paths for sensitive data
@@ -104,13 +105,8 @@ const serializers = {
 	},
 }
 
-// Pino configuration for Cloudflare Workers
+// Pino configuration for Express.js server
 const pinoConfig: pino.LoggerOptions = {
-	// Use browser transport for console output in Workers
-	browser: {
-		asObject: false,
-		serialize: true,
-	},
 	// Set redaction paths
 	redact: {
 		paths: REDACT_PATHS,
@@ -122,7 +118,7 @@ const pinoConfig: pino.LoggerOptions = {
 	timestamp: pino.stdTimeFunctions.isoTime,
 	// Base context
 	base: {
-		env: 'cloudflare-worker',
+		env: 'express-server',
 	},
 }
 
@@ -173,12 +169,22 @@ export function buildLogger(level: PinoLogLevel = 'info'): AppLogger {
 				}
 			}
 
-			return {
-				debug: createChildLogFunction(childLogger.debug.bind(childLogger)),
-				info: createChildLogFunction(childLogger.info.bind(childLogger)),
-				warn: createChildLogFunction(childLogger.warn.bind(childLogger)),
-				error: createChildLogFunction(childLogger.error.bind(childLogger)),
-			}
+			      return {
+        debug: createChildLogFunction(childLogger.debug.bind(childLogger)),
+        info: createChildLogFunction(childLogger.info.bind(childLogger)),
+        warn: createChildLogFunction(childLogger.warn.bind(childLogger)),
+        error: createChildLogFunction(childLogger.error.bind(childLogger)),
+        child: (nestedContextId: string) => {
+          const nestedLogger = childLogger.child({ contextId: nestedContextId })
+          return {
+            debug: createChildLogFunction(nestedLogger.debug.bind(nestedLogger)),
+            info: createChildLogFunction(nestedLogger.info.bind(nestedLogger)),
+            warn: createChildLogFunction(nestedLogger.warn.bind(nestedLogger)),
+            error: createChildLogFunction(nestedLogger.error.bind(nestedLogger)),
+            child: (ctx: string) => logger.child(ctx)
+          }
+        }
+      }
 		},
 	}
 
@@ -188,3 +194,28 @@ export function buildLogger(level: PinoLogLevel = 'info'): AppLogger {
 // Create singleton logger instance with default level
 // This will be reconfigured in MyMCP.init() with the actual level from config
 export const logger = buildLogger('info')
+
+// Export Logger class for compatibility
+export class Logger {
+  private logger: AppLogger
+  
+  constructor(private context: string) {
+    this.logger = logger.child(context)
+  }
+  
+  debug(message: string, data?: any) {
+    this.logger.debug(message, data)
+  }
+  
+  info(message: string, data?: any) {
+    this.logger.info(message, data)
+  }
+  
+  warn(message: string, data?: any) {
+    this.logger.warn(message, data)
+  }
+  
+  error(message: string, data?: any) {
+    this.logger.error(message, data)
+  }
+}

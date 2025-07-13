@@ -166,10 +166,4 @@ dist
 .yarn/install-state.gz
 .pnp.\*
 
-# wrangler project
 
-wrangler.jsonc
-wrangler.local.jsonc
-wrangler.deploy.jsonc
-.dev.vars
-.wrangler/

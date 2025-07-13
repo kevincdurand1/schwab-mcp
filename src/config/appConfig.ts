@@ -16,22 +16,22 @@ const envSchema = z.object({
 		})
 		.min(1, 'SCHWAB_CLIENT_SECRET cannot be empty'),
 
-	COOKIE_ENCRYPTION_KEY: z
-		.string({
-			required_error:
-				'COOKIE_ENCRYPTION_KEY is required for secure cookie storage',
-		})
-		.min(1, 'COOKIE_ENCRYPTION_KEY cannot be empty'),
-
 	SCHWAB_REDIRECT_URI: z
 		.string({
 			required_error: 'SCHWAB_REDIRECT_URI is required for OAuth callback',
 		})
 		.url('SCHWAB_REDIRECT_URI must be a valid URL'),
 
-	OAUTH_KV: z.any().refine((v) => !!v, {
-		message: 'OAUTH_KV binding is required for token storage',
-	}),
+	SESSION_SECRET: z
+		.string({
+			required_error:
+				'SESSION_SECRET is required for Express session management',
+		})
+		.min(1, 'SESSION_SECRET cannot be empty'),
+
+	REDIS_URL: z
+		.string()
+		.optional(),
 
 	LOG_LEVEL: z
 		.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal'])
@@ -42,6 +42,18 @@ const envSchema = z.object({
 		.enum(['development', 'staging', 'production'])
 		.optional()
 		.default('production'),
+
+	PORT: z
+		.string()
+		.optional(),
+
+	ALLOWED_ORIGINS: z
+		.string()
+		.optional(),
+
+	PUBLIC_URL: z
+		.string()
+		.optional(),
 })
 
 function buildConfigInternal(env: Env): ValidatedEnv {
@@ -72,10 +84,8 @@ export const getConfig = (() => {
 
 	return (env: Env): ValidatedEnv => {
 		// Create a simple hash of the env object for memoization
-		// Exclude OAUTH_PROVIDER to avoid circular reference issues
 		const envHash = JSON.stringify(
 			Object.keys(env)
-				.filter((key) => key !== 'OAUTH_PROVIDER') // Exclude circular reference
 				.sort()
 				.map((key) => [key, (env as any)[key]]),
 		)

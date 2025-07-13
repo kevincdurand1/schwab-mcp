@@ -1,4 +1,12 @@
 {
 	"extends": ["@epic-web/config/typescript"],
-	"include": ["types/**/*.d.ts", "src/**/*.ts"]
+	"include": ["src/**/*.ts", "types/**/*.ts"],
+	"compilerOptions": {
+		"outDir": "./dist",
+		"rootDir": ".",
+		"declaration": true,
+		"sourceMap": true,
+		"noEmit": false,
+		"allowImportingTsExtensions": false
+	}
 }

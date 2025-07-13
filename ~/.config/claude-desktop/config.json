@@ -1,0 +1,11 @@
+{
+  "servers": {
+    "schwab-mcp": {
+      "command": "npx",
+      "args": [
+        "tsx",
+        "/Users/kevindurand/Documents/GitHub/schwab-mcp/src/mcp-server.ts"
+      ]
+    }
+  }
+} 

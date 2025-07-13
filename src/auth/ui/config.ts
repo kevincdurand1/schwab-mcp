@@ -1,7 +1,7 @@
 /**
  * OAuth Approval Dialog Configuration
  *
- * Configuration for the Cloudflare-style streamlined approval dialog
+ * Configuration for the streamlined approval dialog
  */
 
 /**

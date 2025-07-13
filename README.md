@@ -1,12 +1,13 @@
 # Schwab MCP Server
 
-A Model Context Protocol (MCP) server that enables AI assistants like Claude to
-securely interact with Charles Schwab accounts and market data through the
-official Schwab API.
+A Model Context Protocol (MCP) server that enables any MCP-compatible AI
+assistant to securely interact with Charles Schwab accounts and market data
+through the official Schwab API. Works with Claude, custom LLM integrations, or
+any application that supports the open MCP standard.
 
 ## What You Can Do
 
-Ask Claude to:
+Ask your AI assistant to:
 
 - "Show me my Schwab account balances and positions"
 - "Get real-time quotes for AAPL, GOOGL, and MSFT"
@@ -36,8 +37,8 @@ providing:
   and options chains
 - **Account Privacy**: Built-in account identifier scrubbing to protect
   sensitive information
-- **Enterprise-Ready**: Deployed on Cloudflare Workers with Durable Objects for
-  state management
+- **Enterprise-Ready**: Deployed with Docker using Express.js and Redis for
+  session management
 
 ## Features
 
@@ -83,77 +84,77 @@ providing:
 
 1. **Schwab Developer Account**: Register at
    [Schwab Developer Portal](https://developer.schwab.com)
-2. **Cloudflare Account**: For deployment (Workers paid plan required for
-   Durable Objects)
-3. **Node.js**: Version 22.x or higher
-4. **Wrangler CLI**: Installed via npm (included in dev dependencies)
+2. **Docker**: For deployment (recommended)
+3. **Node.js**: Version 22.x or higher (for local development)
+4. **Redis**: For session storage (included in Docker setup)
 
 ## Getting Started
 
-### Quick Setup
+### Quick Setup with Docker
+
+```bash
+git clone <repository-url>
+cd schwab-mcp
+cp .env.example .env
+# Edit .env with your Schwab API credentials
+
+# Build and run with Docker
+npm run docker:build
+npm run docker:up
+
+# View logs
+npm run docker:logs
+```
+
+### Manual Setup
 
 ```bash
 git clone <repository-url>
 cd schwab-mcp
 npm install
 
-# Authenticate with Cloudflare (first time only)
-npx wrangler login
+# Set up environment variables
+cp .env.example .env
+# Edit .env with your configuration
 
-# Create KV namespace for OAuth token storage
-npx wrangler kv:namespace create "OAUTH_KV"
-# Note the ID from the output - you'll need it for configuration
-
-# Set up your personal configuration
-cp wrangler.example.jsonc wrangler.jsonc
-# Edit wrangler.jsonc to:
-# 1. Replace YOUR_KV_NAMESPACE_ID_HERE with the ID from above
-# 2. Change the name to something unique (e.g., "schwab-mcp-yourname")
-
-# Set your secrets
-npx wrangler secret put SCHWAB_CLIENT_ID      # Your Schwab App Key
-npx wrangler secret put SCHWAB_CLIENT_SECRET  # Your Schwab App Secret
-npx wrangler secret put SCHWAB_REDIRECT_URI   # https://your-worker-name.workers.dev/callback
-npx wrangler secret put COOKIE_ENCRYPTION_KEY # Generate with: openssl rand -hex 32
-
-# Deploy
-npm run deploy
+# Build and run
+npm run build
+npm start
 ```
 
-### Configuration Notes
-
-- `wrangler.example.jsonc` - Template configuration (committed)
-- `wrangler.jsonc` - Your personal config (git-ignored, created from template)
-- `.dev.vars` - Local development secrets (git-ignored, optional)
-
-Since `wrangler.jsonc` is git-ignored, you can safely develop and test with your
-personal configuration without exposing secrets.
-
-### Detailed Configuration
+### Configuration
 
 #### 1. Create a Schwab App
 
 1. Log in to the [Schwab Developer Portal](https://developer.schwab.com)
 2. Create a new app with:
    - **App Name**: Your MCP server name
-   - **Callback URL**:
-     `https://schwab-mcp.<your-subdomain>.workers.dev/callback`
+   - **Callback URL**: `http://localhost:3000/callback` (or your production URL)
    - **App Type**: Personal or third-party based on your use case
 3. Note your **App Key** (Client ID) and generate an **App Secret**
 
 #### 2. Set Environment Variables
 
-The same secrets from Quick Setup need to be set (see above).
+Copy `.env.example` to `.env` and configure:
 
-### GitHub Actions Deployment
+```env
+# Required - Schwab API credentials
+SCHWAB_CLIENT_ID=your_app_key
+SCHWAB_CLIENT_SECRET=your_app_secret
+SCHWAB_REDIRECT_URI=http://localhost:3000/callback
 
-For automated deployments, add these GitHub repository secrets:
+# Required - Session security
+SESSION_SECRET=your_random_session_secret
 
-1. **`CLOUDFLARE_API_TOKEN`**: Your Cloudflare API token
-2. **`OAUTH_KV_ID`**: Your KV namespace ID
+# Optional - Server configuration
+PORT=3000
+LOG_LEVEL=info
 
-The workflow handles validation and deployment when pushing to `main`.
-Cloudflare secrets must still be set via `wrangler secret`.
+# Optional - Redis configuration (if not using Docker)
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=your_redis_password
+```
 
 ### Testing with Inspector
 
@@ -163,26 +164,12 @@ Test your deployment using the MCP Inspector:
 npx @modelcontextprotocol/inspector@latest
 ```
 
-Enter `https://schwab-mcp.<your-subdomain>.workers.dev/sse` and connect. You'll
-be prompted to authenticate with Schwab.
+Enter `http://localhost:3000/sse` and connect. You'll be prompted to
+authenticate with Schwab.
 
 ## Usage
 
 ### Claude Desktop Configuration
-
-### 1. Use Claude Integrations
-
-1. Go to the [Claude Desktop](https://www.anthropic.com/docs/claude-desktop)
-   settings
-2. Click on the "Integrations" tab
-3. Click on the "Add Custom Integration" button
-4. Enter the integration name "Schwab"
-5. Enter the MCP Server URL:
-   `https://schwab-mcp.<your-subdomain>.workers.dev/sse`
-6. Click on the "Add" button
-7. Click "Connect" and the Schwab Authentication flow will start.
-
-### 2. Add the MCP Server to your Claude Desktop configuration
 
 Add the following to your Claude Desktop configuration file:
 
@@ -191,10 +178,7 @@ Add the following to your Claude Desktop configuration file:
 	"mcpServers": {
 		"schwab": {
 			"command": "npx",
-			"args": [
-				"mcp-remote",
-				"https://schwab-mcp.<your-subdomain>.workers.dev/sse"
-			]
+			"args": ["mcp-remote", "http://localhost:3000/sse"]
 		}
 	}
 }
@@ -215,57 +199,61 @@ Once connected, you can ask Claude to:
 
 ### Local Development
 
-For local development, create a `.dev.vars` file (automatically ignored by git):
+For local development, create a `.env` file:
 
 ```env
 SCHWAB_CLIENT_ID=your_development_app_key
 SCHWAB_CLIENT_SECRET=your_development_app_secret
-SCHWAB_REDIRECT_URI=http://localhost:8788/callback
-COOKIE_ENCRYPTION_KEY=your_random_key_here
-LOG_LEVEL=DEBUG  # Optional: Enable debug logging
+SCHWAB_REDIRECT_URI=http://localhost:3000/callback
+SESSION_SECRET=your_random_session_secret
+LOG_LEVEL=debug
 ```
 
 Run locally:
 
 ```bash
 npm run dev
-# Server will be available at http://localhost:8788
+# Server will be available at http://localhost:3000
 ```
 
-Connect to `http://localhost:8788/sse` using the MCP Inspector for testing.
+Connect to `http://localhost:3000/sse` using the MCP Inspector for testing.
 
 ## Architecture
 
 ### Technology Stack
 
-- **Runtime**: Cloudflare Workers with Durable Objects
-- **Authentication**: OAuth 2.0 with PKCE via
-  `@cloudflare/workers-oauth-provider`
+- **Runtime**: Node.js with Express.js
+- **Authentication**: OAuth 2.0 with PKCE
 - **API Client**: `@sudowealth/schwab-api` for type-safe Schwab API access
-- **MCP Framework**: `@modelcontextprotocol/sdk` with `workers-mcp` adapter
-- **State Management**: KV storage for tokens, Durable Objects for session state
+- **MCP Framework**: `@modelcontextprotocol/sdk`
+- **Session Management**: Redis for session storage
+- **Deployment**: Docker with docker-compose
 
 ### Security Features
 
 1. **OAuth 2.0 with PKCE**: Secure authentication flow preventing authorization
    code interception
 2. **Enhanced Token Management**:
-   - Centralized KV token store with automatic migration
+   - Redis-based token store with automatic refresh
    - Automatic token refresh (5 minutes before expiration)
-   - 31-day token persistence with TTL
+   - Configurable token persistence
 3. **Account Scrubbing**: Sensitive account identifiers are automatically
    replaced with display names
-4. **State Security**: HMAC-SHA256 signatures for state parameter integrity
-5. **Cookie Encryption**: Client approval state encrypted with AES-256
-6. **Secret Redaction**: Automatic masking of sensitive data in logs
+4. **Session Security**: Express sessions with Redis backend
+5. **Secret Redaction**: Automatic masking of sensitive data in logs
 
 ## Development
 
 ### Available Scripts
 
 ```bash
-npm run dev          # Start development server on port 8788
-npm run deploy       # Deploy to Cloudflare Workers
+npm run dev          # Start development server with hot reload
+npm run build        # Build TypeScript to JavaScript
+npm run start        # Start production server
+npm run docker:build # Build Docker image
+npm run docker:up    # Start with docker-compose
+npm run docker:down  # Stop docker-compose
+npm run docker:logs  # View container logs
 npm run typecheck    # Run TypeScript type checking
 npm run lint         # Run ESLint with automatic fixes
 npm run format       # Format code with Prettier
@@ -277,17 +265,13 @@ npm run validate     # Run typecheck and lint together
 The server includes comprehensive logging with configurable levels:
 
 - **Development**: Terminal output with colored logs
-- **Production**: Cloudflare dashboard → Workers → Logs
+- **Production**: Structured JSON logs
 - **Log Levels**: DEBUG, INFO, WARN, ERROR (set via LOG_LEVEL env var)
 
 Enable debug logging to see detailed OAuth flow and API interactions:
 
-```bash
-# For local development
-echo "LOG_LEVEL=DEBUG" >> .dev.vars
-
-# For production
-npx wrangler secret put LOG_LEVEL --secret="DEBUG"
+```env
+LOG_LEVEL=debug
 ```
 
 ### Error Handling
@@ -316,41 +300,45 @@ MIT
 
 ### Common Issues
 
-1. **"KV namespace not found" error**
-
-   - Ensure you created the KV namespace and updated `wrangler.jsonc`
-   - Run `npx wrangler kv:namespace list` to verify
+1. **"Connection refused" error**
+   - Ensure Redis is running (included in Docker setup)
+   - Check that the server is running on the expected port
 
 2. **Authentication failures**
-
    - Verify your redirect URI matches exactly in Schwab app settings
-   - Check that all secrets are set correctly with `npx wrangler secret list`
+   - Check that all environment variables are set correctly
    - Enable debug logging to see detailed OAuth flow
 
-3. **"Durable Objects not available" error**
-
-   - Ensure you have a paid Cloudflare Workers plan
-   - Durable Objects are not available on the free tier
-
-4. **Token refresh issues**
+3. **Token refresh issues**
    - The server automatically refreshes tokens 5 minutes before expiration
-   - Tokens are migrated from clientId to schwabUserId keys automatically
-   - Check KV namespace for stored tokens:
-     `npx wrangler kv:key list --namespace-id=<your-id>`
+   - Check Redis for stored tokens and sessions
+
+### Docker Issues
+
+If you encounter Docker issues:
+
+```bash
+# Rebuild containers
+npm run docker:down
+npm run docker:build
+npm run docker:up
+
+# View logs
+npm run docker:logs
+```
 
 ## Recent Updates
 
-- **Enhanced Token Management**: Centralized KV token store prevents token
-  divergence
-- **Improved Security**: HMAC-SHA256 state validation and automatic secret
-  redaction
+- **Express.js Migration**: Migrated from Cloudflare Workers to Express.js
+- **Redis Integration**: Session and token storage with Redis
+- **Docker Support**: Complete Docker deployment with docker-compose
+- **Enhanced Security**: Improved session management and token handling
 - **Better Error Handling**: Structured error types with Schwab API error
   mapping
-- **Configurable Logging**: Debug mode for troubleshooting OAuth and API issues
 
 ## Acknowledgments
 
-- Built with [Cloudflare Workers](https://workers.cloudflare.com/)
+- Built with [Express.js](https://expressjs.com/)
 - Uses [Model Context Protocol](https://modelcontextprotocol.io/)
 - Powered by
   [@sudowealth/schwab-api](https://www.npmjs.com/package/@sudowealth/schwab-api)

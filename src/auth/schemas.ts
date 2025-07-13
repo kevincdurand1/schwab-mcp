@@ -8,7 +8,7 @@ export const ApprovedClientsSchema = z.array(z.string())
 
 /**
  * Schema for OAuth request information
- * Matches the AuthRequest interface from @cloudflare/workers-oauth-provider
+ * Standard OAuth 2.0 authorization request parameters
  */
 const AuthRequestSchema = z.object({
 	// Required fields

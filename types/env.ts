@@ -1,5 +1,5 @@
 /**
- * Environment variables and bindings for the Schwab MCP worker
+ * Environment variables for the Schwab MCP Express server
  *
  * This is the single source of truth for environment variable definitions.
  * In runtime, these variables are validated and accessed through AppConfig.
@@ -16,11 +16,6 @@ export interface Env {
 	SCHWAB_CLIENT_SECRET: string
 
 	/**
-	 * Secret key used for cookie encryption
-	 */
-	COOKIE_ENCRYPTION_KEY: string
-
-	/**
 	 * OAuth redirect URI for callback after authentication
 	 * This should be a fixed, configured value to ensure consistency
 	 * across different environments and proxies
@@ -28,9 +23,14 @@ export interface Env {
 	SCHWAB_REDIRECT_URI: string
 
 	/**
-	 * KV namespace for storing tokens (required)
+	 * Session secret for Express session management
 	 */
-	OAUTH_KV: KVNamespace
+	SESSION_SECRET: string
+
+	/**
+	 * Optional Redis URL for token and session storage
+	 */
+	REDIS_URL?: string
 
 	/**
 	 * Optional log level for application logging
@@ -44,9 +44,19 @@ export interface Env {
 	ENVIRONMENT?: string
 
 	/**
-	 * Optional comma-separated list of additional redirect URI regex patterns
+	 * Optional server port
 	 */
-	ALLOWED_REDIRECT_REGEXPS?: string
+	PORT?: string
+
+	/**
+	 * Optional allowed origins for CORS
+	 */
+	ALLOWED_ORIGINS?: string
+
+	/**
+	 * Optional public URL for auth callbacks
+	 */
+	PUBLIC_URL?: string
 }
 
 /**
@@ -66,19 +76,19 @@ export interface ValidatedEnv {
 	readonly SCHWAB_CLIENT_SECRET: string
 
 	/**
-	 * Secret key used for cookie encryption
-	 */
-	readonly COOKIE_ENCRYPTION_KEY: string
-
-	/**
 	 * OAuth redirect URI for callback after authentication
 	 */
 	readonly SCHWAB_REDIRECT_URI: string
 
 	/**
-	 * KV namespace for storing tokens (required)
+	 * Session secret for Express session management
 	 */
-	readonly OAUTH_KV: KVNamespace
+	readonly SESSION_SECRET: string
+
+	/**
+	 * Optional Redis URL for token and session storage
+	 */
+	readonly REDIS_URL?: string
 
 	/**
 	 * Optional log level for application logging
@@ -92,7 +102,17 @@ export interface ValidatedEnv {
 	readonly ENVIRONMENT?: 'development' | 'staging' | 'production'
 
 	/**
-	 * Optional comma-separated list of additional redirect URI regex patterns
+	 * Optional server port
 	 */
-	readonly ALLOWED_REDIRECT_REGEXPS?: string
+	readonly PORT?: string
+
+	/**
+	 * Optional allowed origins for CORS
+	 */
+	readonly ALLOWED_ORIGINS?: string
+
+	/**
+	 * Optional public URL for auth callbacks
+	 */
+	readonly PUBLIC_URL?: string
 }

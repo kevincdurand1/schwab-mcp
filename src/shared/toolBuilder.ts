@@ -1,12 +1,12 @@
 import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { type SchwabApiClient } from '@sudowealth/schwab-api'
 import { z } from 'zod'
+import { type BrokerClient } from '../core/types.js'
 import { logger } from './log'
 
 // 1. Define and export the toolRegistry
 type ToolHandler<S extends z.ZodSchema> = (
 	input: z.infer<S>,
-	client: SchwabApiClient,
+	client: BrokerClient,
 ) => Promise<ToolResponse>
 
 interface RegisteredTool<S extends z.ZodSchema> {
@@ -87,11 +87,13 @@ function formatResponse(response: ToolResponse): McpContentArray {
 	}
 }
 
-function isSchwabApiError(error: any): boolean {
+function isBrokerApiError(error: any): boolean {
 	return (
 		error &&
 		typeof error === 'object' &&
-		(error.name === 'SchwabApiError' ||
+		(error.name === 'BrokerError' ||
+			error.constructor?.name === 'BrokerError' ||
+			error.name === 'SchwabApiError' ||
 			error.constructor?.name === 'SchwabApiError')
 	)
 }
@@ -111,7 +113,7 @@ export function toolError(
 ): ToolResponse {
 	const error = message instanceof Error ? message : new Error(String(message))
 	let enhancedDetails = { ...details }
-	if (isSchwabApiError(error) || isAuthError(error)) {
+	if (isBrokerApiError(error) || isAuthError(error)) {
 		const apiError = error as any
 		enhancedDetails = {
 			...enhancedDetails,
@@ -152,7 +154,7 @@ export function toolSuccess<T>({
 }
 
 export function createTool<S extends z.ZodSchema<any, any>>(
-	client: SchwabApiClient,
+	client: BrokerClient,
 	server: McpServer,
 	{
 		name,

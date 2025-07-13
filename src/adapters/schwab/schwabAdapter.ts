@@ -1,0 +1,828 @@
+/**
+ * Schwab Broker Adapter using our custom API client
+ * Implements the generic broker interface for Schwab
+ */
+
+import { type RedisClientType } from 'redis';
+import { 
+  createSchwabApiClient, 
+  createRedisTokenManager,
+  type SchwabApiEndpoints 
+} from '../../lib/schwab-api/index.js';
+import {
+  type BrokerClient,
+  type AccountsAPI,
+  type QuotesAPI, 
+  type OrdersAPI,
+  type TransactionsAPI,
+  type MarketDataAPI,
+  type PortfolioAPI,
+  type WatchlistAPI,
+  type ActivityAPI,
+  type Account,
+  type Quote,
+  type Order,
+  type Transaction,
+  type GetAccountsParams,
+  type GetQuotesParams,
+  type GetOrdersParams,
+  type GetTransactionsParams,
+  type GetUserPreferenceParams,
+  type PlaceOrderParams,
+  type ReplaceOrderParams,
+  type GetPositionsParams,
+  type GetPortfolioSummaryParams,
+  type GetPerformanceParams,
+  type GetWatchlistsParams,
+  type CreateWatchlistParams,
+  type AddToWatchlistParams,
+  type RemoveFromWatchlistParams,
+  type GetAccountActivityParams
+} from '../../core/types.js';
+
+// Use console.error for logging to avoid polluting stdout (MCP communication channel)
+const log = {
+  info: (msg: string, data?: any) => console.error(`[SchwabAdapter] ${msg}`, data || ''),
+  error: (msg: string, data?: any) => console.error(`[SchwabAdapter] ${msg}`, data || ''),
+};
+
+// Response size management
+const MAX_RESPONSE_SIZE = 900000; // ~900KB to stay under 1MB limit
+
+function checkResponseSize(response: any, operation: string, symbol?: string): any {
+  const responseStr = JSON.stringify(response);
+  
+  if (responseStr.length <= MAX_RESPONSE_SIZE) {
+    return response;
+  }
+
+  log.info(`${operation} response too large (${responseStr.length} chars)${symbol ? ` for ${symbol}` : ''}, truncating`);
+  
+  // For general responses, just add metadata and warn
+  return {
+    ...response,
+    _metadata: {
+      truncated: true,
+      originalSize: responseStr.length,
+      message: `Response truncated due to size (${Math.round(responseStr.length / 1024)}KB). Use more specific parameters to reduce data size.`,
+      suggestion: 'Consider using filters like date ranges, strike counts, or other limiting parameters.'
+    }
+  };
+}
+
+function createBrokerError(error: any, operation: string): Error {
+  const message = error?.message || 'Unknown error';
+  const details = error?.details || error;
+  return new Error(`[Schwab] ${operation}: ${message}. Details: ${JSON.stringify(details)}`);
+}
+
+// ===============================
+// API Implementations
+// ===============================
+
+class SchwabAccountsAPI implements AccountsAPI {
+  constructor(private client: SchwabApiEndpoints) {}
+
+  async getAccounts(params: GetAccountsParams): Promise<Account[]> {
+    try {
+      const response = await this.client.getAccounts({
+        fields: params.fields
+      });
+      return response.map(mapSchwabAccount);
+    } catch (error) {
+      throw createBrokerError(error, 'getAccounts');
+    }
+  }
+
+  async getAccountNumbers(params?: GetAccountsParams): Promise<string[]> {
+    try {
+      const accounts = await this.getAccounts(params || {});
+      return accounts.map(account => account.accountNumber);
+    } catch (error) {
+      throw createBrokerError(error, 'getAccountNumbers');
+    }
+  }
+}
+
+class SchwabQuotesAPI implements QuotesAPI {
+  constructor(private client: SchwabApiEndpoints) {}
+
+  async getQuotes(params: GetQuotesParams): Promise<Quote[]> {
+    try {
+      const symbols = params.symbols.split(',');
+      const response = await this.client.getQuotes({
+        symbols,
+        fields: params.fields,
+        indicative: params.indicative
+      });
+      return Object.values(response).map(mapSchwabQuote);
+    } catch (error) {
+      throw createBrokerError(error, 'getQuotes');
+    }
+  }
+
+  async getQuote(symbol: string, fields?: string): Promise<Quote> {
+    try {
+      const response = await this.client.getQuote(symbol, fields);
+      return mapSchwabQuote(response);
+    } catch (error) {
+      throw createBrokerError(error, 'getQuote');
+    }
+  }
+}
+
+class SchwabOrdersAPI implements OrdersAPI {
+  constructor(private client: SchwabApiEndpoints) {}
+
+  async getOrders(params: GetOrdersParams): Promise<Order[]> {
+    try {
+      const response = await this.client.getOrders({
+        accountNumber: params.accountNumber || '',
+        maxResults: params.maxResults,
+        fromEnteredTime: params.fromEnteredTime,
+        toEnteredTime: params.toEnteredTime,
+        status: params.status
+      });
+      
+      const mapped = response.map(mapSchwabOrder);
+      
+      // Check response size for large order lists
+      const sizeChecked = checkResponseSize(mapped, 'getOrders', params.accountNumber);
+      return Array.isArray(sizeChecked) ? sizeChecked : [sizeChecked];
+    } catch (error) {
+      throw createBrokerError(error, 'getOrders');
+    }
+  }
+
+  async getOrder(orderId: string, accountNumber: string): Promise<Order> {
+    try {
+      const response = await this.client.getOrder(accountNumber, orderId);
+      return mapSchwabOrder(response);
+    } catch (error) {
+      throw createBrokerError(error, 'getOrder');
+    }
+  }
+
+  async getOrdersByAccountNumber(params: GetOrdersParams): Promise<Order[]> {
+    return this.getOrders(params);
+  }
+
+  async cancelOrder(orderId: string, accountNumber: string): Promise<void> {
+    try {
+      await this.client.cancelOrder(accountNumber, orderId);
+    } catch (error) {
+      throw createBrokerError(error, 'cancelOrder');
+    }
+  }
+
+  async placeOrder(params: PlaceOrderParams): Promise<Order> {
+    try {
+      const orderData: any = {
+        orderType: params.orderType || 'MARKET',
+        session: 'NORMAL',
+        duration: params.duration || 'DAY',
+        orderStrategyType: 'SINGLE',
+        orderLegCollection: [
+          {
+            instruction: params.side || 'BUY',
+            quantity: params.quantity,
+            instrument: {
+              symbol: params.symbol,
+              assetType: 'EQUITY'
+            }
+          }
+        ]
+      };
+
+      // Add price for limit orders
+      if (params.orderType === 'LIMIT' && params.price) {
+        orderData.price = params.price;
+      }
+
+      const response = await this.client.placeOrder(params.accountNumber || '', orderData);
+      
+      // Return a basic order object since Schwab returns order ID in headers
+      return {
+        orderId: response.orderId || 'PENDING',
+        accountNumber: params.accountNumber || '',
+        symbol: params.symbol || '',
+        quantity: params.quantity || 0,
+        status: 'QUEUED'
+      };
+    } catch (error) {
+      throw createBrokerError(error, 'placeOrder');
+    }
+  }
+
+  async replaceOrder(params: ReplaceOrderParams): Promise<Order> {
+    try {
+      const orderData: any = {
+        orderType: params.orderType || 'MARKET',
+        session: 'NORMAL',
+        duration: params.duration || 'DAY',
+        orderStrategyType: 'SINGLE',
+        orderLegCollection: [
+          {
+            instruction: params.side || 'BUY',
+            quantity: params.quantity,
+            instrument: {
+              symbol: params.symbol,
+              assetType: 'EQUITY'
+            }
+          }
+        ]
+      };
+
+      // Add price for limit orders
+      if (params.orderType === 'LIMIT' && params.price) {
+        orderData.price = params.price;
+      }
+
+      const response = await this.client.replaceOrder(
+        params.accountNumber || '', 
+        params.orderId || '', 
+        orderData
+      );
+      
+      // Return updated order object
+      return {
+        orderId: params.orderId || '',
+        accountNumber: params.accountNumber || '',
+        symbol: params.symbol || '',
+        quantity: params.quantity || 0,
+        status: 'REPLACED'
+      };
+    } catch (error) {
+      throw createBrokerError(error, 'replaceOrder');
+    }
+  }
+}
+
+class SchwabTransactionsAPI implements TransactionsAPI {
+  constructor(private client: SchwabApiEndpoints) {}
+
+  async getTransactions(params: GetTransactionsParams): Promise<Transaction[]> {
+    try {
+      const response = await this.client.getTransactions({
+        accountNumber: params.accountNumber || '',
+        type: params.type,
+        startDate: params.startDate,
+        endDate: params.endDate
+      });
+      
+      const mapped = response.map(mapSchwabTransaction);
+      
+      // Check response size for large transaction lists
+      const sizeChecked = checkResponseSize(mapped, 'getTransactions', params.accountNumber);
+      return Array.isArray(sizeChecked) ? sizeChecked : [sizeChecked];
+    } catch (error) {
+      throw createBrokerError(error, 'getTransactions');
+    }
+  }
+
+  async getTransaction(transactionId: string, accountNumber: string): Promise<Transaction> {
+    try {
+      const response = await this.client.getTransaction(accountNumber, transactionId);
+      return mapSchwabTransaction(response);
+    } catch (error) {
+      throw createBrokerError(error, 'getTransaction');
+    }
+  }
+}
+
+class SchwabMarketDataAPI implements MarketDataAPI {
+  constructor(private client: SchwabApiEndpoints) {}
+
+  async getQuotes(params: GetQuotesParams): Promise<Quote[]> {
+    try {
+      const symbols = typeof params.symbols === 'string' ? params.symbols.split(',') : params.symbols;
+      const response = await this.client.getQuotes({
+        symbols,
+        fields: params.fields,
+        indicative: params.indicative
+      });
+      return Object.values(response).map(mapSchwabQuote);
+    } catch (error) {
+      throw createBrokerError(error, 'getQuotes');
+    }
+  }
+
+  async getPriceHistory(params: any): Promise<any> {
+    try {
+      const response = await this.client.getPriceHistory(params.symbol, {
+        periodType: params.periodType,
+        period: params.period,
+        frequencyType: params.frequencyType,
+        frequency: params.frequency,
+        startDate: params.startDate,
+        endDate: params.endDate,
+        needExtendedHoursData: params.needExtendedHoursData,
+        needPreviousClose: params.needPreviousClose
+      });
+      
+      // Handle large price history responses
+      return this.truncatePriceHistoryResponse(response, params.symbol);
+    } catch (error) {
+      throw createBrokerError(error, 'getPriceHistory');
+    }
+  }
+
+  private truncatePriceHistoryResponse(response: any, symbol: string): any {
+    const MAX_RESPONSE_SIZE = 900000; // ~900KB to stay under 1MB limit
+    const responseStr = JSON.stringify(response);
+    
+    if (responseStr.length <= MAX_RESPONSE_SIZE) {
+      return response;
+    }
+
+    log.info(`[SchwabAdapter] Price history response too large (${responseStr.length} chars), truncating for ${symbol}`);
+
+    const candles = response.candles || [];
+    const totalCandles = candles.length;
+    
+    if (totalCandles === 0) {
+      return response;
+    }
+
+    // Keep a reasonable sample of candles (every nth candle + recent data)
+    const maxCandles = 500; // Reasonable limit for analysis
+    let sampledCandles: any[] = [];
+    
+    if (totalCandles <= maxCandles) {
+      sampledCandles = candles;
+    } else {
+      // Keep recent candles (last 100) + evenly distributed historical samples
+      const recentCandles = candles.slice(-100);
+      const historicalCandles = candles.slice(0, -100);
+      const sampleRatio = Math.ceil(historicalCandles.length / (maxCandles - 100));
+      
+      const sampledHistorical = historicalCandles.filter((_: any, index: number) => index % sampleRatio === 0);
+      sampledCandles = [...sampledHistorical, ...recentCandles];
+    }
+
+    const truncated = {
+      ...response,
+      candles: sampledCandles,
+      _metadata: {
+        truncated: true,
+        originalCandles: totalCandles,
+        sampledCandles: sampledCandles.length,
+        originalSize: responseStr.length,
+        truncatedSize: 0, // Will be calculated after
+        message: `Price history data was truncated from ${totalCandles} to ${sampledCandles.length} candles due to size (${Math.round(responseStr.length / 1024)}KB). Recent data is preserved with historical sampling.`
+      }
+    };
+
+    // Calculate final size
+    const truncatedStr = JSON.stringify(truncated);
+    truncated._metadata.truncatedSize = truncatedStr.length;
+    
+    return truncated;
+  }
+
+  async getOptionChain(params: any): Promise<any> {
+    try {
+      const response = await this.client.getOptionChains(params.symbol, {
+        contractType: params.contractType,
+        strikeCount: params.strikeCount,
+        includeQuotes: params.includeQuotes,
+        strategy: params.strategy,
+        interval: params.interval,
+        strike: params.strike,
+        range: params.range,
+        fromDate: params.fromDate,
+        toDate: params.toDate,
+        expMonth: params.expMonth,
+        optionType: params.optionType
+      });
+      
+      // Handle large option chain responses
+      return this.truncateOptionChainResponse(response, params.symbol);
+    } catch (error) {
+      throw createBrokerError(error, 'getOptionChain');
+    }
+  }
+
+  private truncateOptionChainResponse(response: any, symbol: string): any {
+    const MAX_RESPONSE_SIZE = 900000; // ~900KB to stay under 1MB limit
+    const responseStr = JSON.stringify(response);
+    
+    if (responseStr.length <= MAX_RESPONSE_SIZE) {
+      return response;
+    }
+
+    log.info(`[SchwabAdapter] Option chain response too large (${responseStr.length} chars), truncating for ${symbol}`);
+
+    // Create summarized response
+    const summary = {
+      symbol: response.symbol || symbol,
+      status: response.status,
+      strategy: response.strategy,
+      interval: response.interval,
+      isDelayed: response.isDelayed,
+      isIndex: response.isIndex,
+      daysToExpiration: response.daysToExpiration,
+      interestRate: response.interestRate,
+      underlyingPrice: response.underlyingPrice,
+      volatility: response.volatility,
+      
+      // Summarize call and put maps
+      callExpDateMap: this.summarizeOptionMap(response.callExpDateMap, 'CALL'),
+      putExpDateMap: this.summarizeOptionMap(response.putExpDateMap, 'PUT'),
+      
+      // Add metadata about truncation
+      _metadata: {
+        truncated: true,
+        originalSize: responseStr.length,
+        truncatedSize: 0, // Will be calculated after
+        message: `Option chain data was truncated due to size (${Math.round(responseStr.length / 1024)}KB). This summary includes key strikes and expirations. Use more specific parameters (strikeCount, range, expMonth) for detailed data.`
+      }
+    };
+
+    // Calculate final size
+    const summaryStr = JSON.stringify(summary);
+    summary._metadata.truncatedSize = summaryStr.length;
+    
+    return summary;
+  }
+
+  private summarizeOptionMap(optionMap: any, type: 'CALL' | 'PUT'): any {
+    if (!optionMap) return null;
+
+    const summarized: any = {};
+    const expirationDates = Object.keys(optionMap).slice(0, 5); // Limit to 5 expiration dates
+
+    for (const expDate of expirationDates) {
+      const strikes = optionMap[expDate];
+      if (!strikes) continue;
+
+      const strikeKeys = Object.keys(strikes);
+      const totalStrikes = strikeKeys.length;
+      
+      // Keep ATM and nearby strikes
+      const middleIndex = Math.floor(strikeKeys.length / 2);
+      const keepIndices = [
+        Math.max(0, middleIndex - 2),
+        middleIndex - 1,
+        middleIndex,
+        middleIndex + 1,
+        Math.min(strikeKeys.length - 1, middleIndex + 2)
+      ].filter((index, pos, arr) => arr.indexOf(index) === pos && index >= 0 && index < strikeKeys.length);
+
+      const summarizedStrikes: any = {};
+      
+      for (const index of keepIndices) {
+        const strikeKey = strikeKeys[index];
+        if (!strikeKey) continue;
+        const options = strikes[strikeKey];
+        if (options && options.length > 0) {
+          // Keep only essential option data
+          summarizedStrikes[strikeKey] = options.map((option: any) => ({
+            putCall: option.putCall,
+            symbol: option.symbol,
+            bid: option.bid,
+            ask: option.ask,
+            last: option.last,
+            mark: option.mark,
+            bidSize: option.bidSize,
+            askSize: option.askSize,
+            lastSize: option.lastSize,
+            highPrice: option.highPrice,
+            lowPrice: option.lowPrice,
+            openPrice: option.openPrice,
+            closePrice: option.closePrice,
+            totalVolume: option.totalVolume,
+            openInterest: option.openInterest,
+            volatility: option.volatility,
+            delta: option.delta,
+            gamma: option.gamma,
+            theta: option.theta,
+            vega: option.vega,
+            strikePrice: option.strikePrice,
+            expirationDate: option.expirationDate,
+            daysToExpiration: option.daysToExpiration,
+            timeValue: option.timeValue,
+            intrinsicValue: option.intrinsicValue,
+            inTheMoney: option.inTheMoney
+          }));
+        }
+      }
+
+      summarized[expDate] = {
+        strikes: summarizedStrikes,
+        _summary: {
+          totalStrikes: totalStrikes,
+          showing: Object.keys(summarizedStrikes).length,
+          note: totalStrikes > 5 ? `Showing ${Object.keys(summarizedStrikes).length} of ${totalStrikes} strikes (ATM and nearby)` : undefined
+        }
+      };
+    }
+
+    return {
+      ...summarized,
+      _summary: {
+        totalExpirations: Object.keys(optionMap).length,
+        showing: expirationDates.length,
+        type: type,
+        note: Object.keys(optionMap).length > 5 ? `Showing ${expirationDates.length} of ${Object.keys(optionMap).length} expiration dates` : undefined
+      }
+    };
+  }
+
+  async getOptionChains(params: any): Promise<any> {
+    return this.getOptionChain(params);
+  }
+
+  async getMovers(params: any): Promise<any> {
+    try {
+      const response = await this.client.getMovers(params.index, params.direction, params.change);
+      return response;
+    } catch (error) {
+      throw createBrokerError(error, 'getMovers');
+    }
+  }
+
+  async getMarketHours(params: any): Promise<any> {
+    try {
+      const response = await this.client.getMarketHours(params.markets, params.date);
+      return response;
+    } catch (error) {
+      throw createBrokerError(error, 'getMarketHours');
+    }
+  }
+
+  async searchInstruments(params: any): Promise<any> {
+    try {
+      const response = await this.client.searchInstruments(params.symbol, params.projection);
+      return response;
+    } catch (error) {
+      throw createBrokerError(error, 'searchInstruments');
+    }
+  }
+
+  async getInstrument(params: any): Promise<any> {
+    try {
+      const response = await this.client.getInstrumentByCusip(params.cusip);
+      return response;
+    } catch (error) {
+      throw createBrokerError(error, 'getInstrument');
+    }
+  }
+
+  async getHistoricalData(params: any): Promise<any> {
+    return this.getPriceHistory(params);
+  }
+
+  async getInstrumentByCusip(params: any): Promise<any> {
+    try {
+      const response = await this.client.getInstrumentByCusip(params.cusip);
+      return response;
+    } catch (error) {
+      throw createBrokerError(error, 'getInstrumentByCusip');
+    }
+  }
+
+  async getNews(_params: any): Promise<any> {
+    throw new Error('getNews not implemented - not available in Schwab API');
+  }
+
+  async getEarningsCalendar(_params: any): Promise<any> {
+    throw new Error('getEarningsCalendar not implemented - not available in Schwab API');
+  }
+
+  async getDividendHistory(_params: any): Promise<any> {
+    throw new Error('getDividendHistory not implemented - not available in Schwab API');
+  }
+
+  async getCompanyProfile(_params: any): Promise<any> {
+    throw new Error('getCompanyProfile not implemented - not available in Schwab API');
+  }
+}
+
+class SchwabPortfolioAPI implements PortfolioAPI {
+  constructor(private client: SchwabApiEndpoints) {}
+
+  async getPositions(params: GetPositionsParams): Promise<any[]> {
+    try {
+      const response = await this.client.getPositions(params.accountNumber || '');
+      return Array.isArray(response) ? response : [response];
+    } catch (error) {
+      throw createBrokerError(error, 'getPositions');
+    }
+  }
+
+  async getPortfolioSummary(params: GetPortfolioSummaryParams): Promise<any> {
+    try {
+      // Use account details to get portfolio summary
+      const response = await this.client.getAccount(params.accountNumber || '', 'positions');
+      return {
+        accountNumber: response.accountNumber,
+        totalValue: response.securitiesAccount?.currentBalances?.liquidationValue,
+        dayChange: response.securitiesAccount?.currentBalances?.totalMarketValue - response.securitiesAccount?.currentBalances?.dayTradingBuyingPower,
+        positions: response.securitiesAccount?.positions || []
+      };
+    } catch (error) {
+      throw createBrokerError(error, 'getPortfolioSummary');
+    }
+  }
+
+  async getPerformance(_params: GetPerformanceParams): Promise<any> {
+    throw new Error('getPerformance not implemented - performance data not available via basic Schwab API');
+  }
+}
+
+class SchwabWatchlistAPI implements WatchlistAPI {
+  constructor(private client: SchwabApiEndpoints) {}
+
+  async getWatchlists(_params: GetWatchlistsParams): Promise<any[]> {
+    try {
+      // GetWatchlistsParams doesn't have accountNumber, need to get it elsewhere
+      const response = await this.client.getWatchlists('');
+      return Array.isArray(response) ? response : [response];
+    } catch (error) {
+      throw createBrokerError(error, 'getWatchlists');
+    }
+  }
+
+  async createWatchlist(params: CreateWatchlistParams): Promise<any> {
+    try {
+      const watchlistData = {
+        name: params.name,
+        description: params.description,
+        watchlistItems: [] // CreateWatchlistParams doesn't have symbols field
+      };
+      
+      // Account number needs to come from elsewhere or be hardcoded
+      const response = await this.client.createWatchlist('', watchlistData);
+      return response;
+    } catch (error) {
+      throw createBrokerError(error, 'createWatchlist');
+    }
+  }
+
+  async addToWatchlist(params: AddToWatchlistParams): Promise<void> {
+    try {
+      // Get existing watchlist (account number needs to come from elsewhere)
+      const watchlist = await this.client.getWatchlist('', params.watchlistId);
+      
+      // Add new symbol
+      const newItem = {
+        instrument: {
+          symbol: params.symbol,
+          assetType: 'EQUITY'
+        }
+      };
+      
+      watchlist.watchlistItems = watchlist.watchlistItems || [];
+      watchlist.watchlistItems.push(newItem);
+      
+      // Update the watchlist
+      await this.client.updateWatchlist('', params.watchlistId, watchlist);
+    } catch (error) {
+      throw createBrokerError(error, 'addToWatchlist');
+    }
+  }
+
+  async removeFromWatchlist(params: RemoveFromWatchlistParams): Promise<void> {
+    try {
+      // Get existing watchlist (account number needs to come from elsewhere)
+      const watchlist = await this.client.getWatchlist('', params.watchlistId);
+      
+      // Remove the symbol
+      watchlist.watchlistItems = (watchlist.watchlistItems || []).filter(
+        (item: any) => item.instrument?.symbol !== params.symbol
+      );
+      
+      // Update the watchlist
+      await this.client.updateWatchlist('', params.watchlistId, watchlist);
+    } catch (error) {
+      throw createBrokerError(error, 'removeFromWatchlist');
+    }
+  }
+}
+
+class SchwabActivityAPI implements ActivityAPI {
+  constructor(private client: SchwabApiEndpoints) {}
+
+  async getAccountActivity(params: GetAccountActivityParams): Promise<any[]> {
+    try {
+      // Use transactions API to get account activity
+      const response = await this.client.getTransactions({
+        accountNumber: params.accountNumber || '',
+        type: undefined, // GetAccountActivityParams doesn't have type field
+        startDate: params.fromDate, // Different field name
+        endDate: undefined // GetAccountActivityParams doesn't have endDate
+      });
+      return Array.isArray(response) ? response : [response];
+    } catch (error) {
+      throw createBrokerError(error, 'getAccountActivity');
+    }
+  }
+
+  async getUserPreference(_params: GetUserPreferenceParams): Promise<any> {
+    try {
+      const response = await this.client.getUserPreferences();
+      return response;
+    } catch (error) {
+      throw createBrokerError(error, 'getUserPreference');
+    }
+  }
+}
+
+// ===============================
+// Data Mappers
+// ===============================
+
+function mapSchwabAccount(schwabAccount: any): Account {
+  return {
+    accountNumber: schwabAccount.accountNumber || schwabAccount.securitiesAccount?.accountNumber || '',
+    type: schwabAccount.type || schwabAccount.securitiesAccount?.type || '',
+    displayName: schwabAccount.displayName,
+    positions: schwabAccount.securitiesAccount?.positions || schwabAccount.positions,
+    balances: schwabAccount.securitiesAccount?.currentBalances || schwabAccount.currentBalances,
+    ...schwabAccount // Include all original fields
+  };
+}
+
+function mapSchwabQuote(schwabQuote: any): Quote {
+  return {
+    symbol: schwabQuote.symbol || '',
+    price: schwabQuote.mark || schwabQuote.lastPrice || schwabQuote.quote?.lastPrice || 0,
+    change: schwabQuote.netChange || schwabQuote.quote?.netChange,
+    changePercent: schwabQuote.netPercentChange || schwabQuote.quote?.netPercentChange,
+    bid: schwabQuote.bidPrice || schwabQuote.quote?.bidPrice,
+    ask: schwabQuote.askPrice || schwabQuote.quote?.askPrice,
+    volume: schwabQuote.totalVolume || schwabQuote.quote?.totalVolume,
+    ...schwabQuote // Include all original fields
+  };
+}
+
+function mapSchwabOrder(schwabOrder: any): Order {
+  return {
+    orderId: schwabOrder.orderId || '',
+    accountNumber: schwabOrder.accountNumber || '',
+    symbol: schwabOrder.orderLegCollection?.[0]?.instrument?.symbol || '',
+    quantity: schwabOrder.orderLegCollection?.[0]?.quantity || 0,
+    status: schwabOrder.status || '',
+    ...schwabOrder // Include all original fields
+  };
+}
+
+function mapSchwabTransaction(schwabTransaction: any): Transaction {
+  return {
+    transactionId: schwabTransaction.transactionId || '',
+    accountNumber: schwabTransaction.accountNumber || '',
+    type: schwabTransaction.type || '',
+    amount: schwabTransaction.netAmount || 0,
+    date: schwabTransaction.transactionDate || '',
+    ...schwabTransaction // Include all original fields
+  };
+}
+
+// ===============================
+// Main Broker Client
+// ===============================
+
+export class SchwabBrokerAdapter implements BrokerClient {
+  public readonly brokerName = 'schwab';
+  public readonly accounts: AccountsAPI;
+  public readonly quotes: QuotesAPI;
+  public readonly orders: OrdersAPI;
+  public readonly transactions: TransactionsAPI;
+  public readonly marketData: MarketDataAPI;
+  public readonly portfolio: PortfolioAPI;
+  public readonly watchlists: WatchlistAPI;
+  public readonly activity: ActivityAPI;
+
+  constructor(private schwabClient: SchwabApiEndpoints) {
+    this.accounts = new SchwabAccountsAPI(schwabClient);
+    this.quotes = new SchwabQuotesAPI(schwabClient);
+    this.orders = new SchwabOrdersAPI(schwabClient);
+    this.transactions = new SchwabTransactionsAPI(schwabClient);
+    this.marketData = new SchwabMarketDataAPI(schwabClient);
+    this.portfolio = new SchwabPortfolioAPI(schwabClient);
+    this.watchlists = new SchwabWatchlistAPI(schwabClient);
+    this.activity = new SchwabActivityAPI(schwabClient);
+  }
+}
+
+/**
+ * Create a Schwab broker adapter with Redis token storage
+ */
+export async function createSchwabBrokerAdapter(redisClient: RedisClientType): Promise<SchwabBrokerAdapter> {
+  if (!redisClient || !redisClient.isOpen) {
+    throw new Error('Redis client must be provided and connected');
+  }
+
+  const tokenManager = createRedisTokenManager(redisClient);
+  
+  const schwabClient = createSchwabApiClient({
+    clientId: process.env.SCHWAB_CLIENT_ID!,
+    clientSecret: process.env.SCHWAB_CLIENT_SECRET!,
+    redirectUri: process.env.SCHWAB_REDIRECT_URI || 'https://127.0.0.1:5001/api/SchwabAuth/callback',
+    tokenManager
+  });
+
+  log.info('Created Schwab broker adapter with custom API client');
+  return new SchwabBrokerAdapter(schwabClient);
+}

@@ -1,1 +1,1 @@
-export * from './approvalDialog'
+export * from './config'

@@ -1,211 +1,267 @@
+/**
+ * Trading tools for Generic Broker MCP
+ * Provides account management and order execution capabilities
+ * Works with any broker adapter (Schwab, Fidelity, TD Ameritrade, etc.)
+ */
+
 import {
-	buildAccountDisplayMap,
-	scrubAccountIdentifiers,
-	GetAccountByNumberParams,
-	GetAccountNumbersParams,
-	GetOrdersParams,
-	GetAccountsParams,
-	GetOrdersByAccountParams,
-	PlaceOrderParams,
-	GetOrderByIdParams,
-	CancelOrderParams,
-	ReplaceOrderParams,
-	GetTransactionsParams,
-	GetTransactionByIdParams,
-	GetUserPreferenceParams,
-} from '@sudowealth/schwab-api'
-import { logger } from '../../shared/log'
-import { createToolSpec } from '../types'
+	GetAccountsParamsSchema,
+	GetOrdersParamsSchema,
+	GetOrderParamsSchema,
+	GetTransactionsParamsSchema,
+	GetUserPreferenceParamsSchema,
+	PlaceOrderParamsSchema,
+	ReplaceOrderParamsSchema,
+	GetPositionsParamsSchema,
+	GetPortfolioSummaryParamsSchema,
+	GetPerformanceParamsSchema,
+	GetWatchlistsParamsSchema,
+	CreateWatchlistParamsSchema,
+	AddToWatchlistParamsSchema,
+	RemoveFromWatchlistParamsSchema,
+	GetAccountActivityParamsSchema,
+} from '../../core/types.js'
+import { createToolSpec } from '../types.js'
+
+// Use console.error for logging to avoid polluting stdout (MCP communication channel)
+const log = {
+  info: (msg: string, data?: any) => console.error(`[INFO] ${msg}`, data || ''),
+  error: (msg: string, data?: any) => console.error(`[ERROR] ${msg}`, data || ''),
+  debug: (msg: string, data?: any) => console.error(`[DEBUG] ${msg}`, data || ''),
+};
 
 export const toolSpecs = [
 	createToolSpec({
 		name: 'getAccounts',
-		description: 'Get accounts',
-		schema: GetAccountsParams,
+		description: 'Get a list of accounts for the authenticated user',
+		schema: GetAccountsParamsSchema,
 		call: async (c, p) => {
-			logger.info('[getAccounts] Fetching accounts', {
-				showPositions: p?.fields,
+			log.info('[getAccounts] Fetching accounts', {
+				fields: p.fields,
 			})
-			const accounts = await c.trader.accounts.getAccounts({
-				queryParams: { fields: p?.fields },
-			})
-			const accountSummaries = accounts.map((acc) => ({
-				...acc.securitiesAccount,
-			}))
-			const displayMap = await buildAccountDisplayMap(c)
-			return scrubAccountIdentifiers(accountSummaries, displayMap)
+			return await c.accounts.getAccounts(p)
 		},
 	}),
 	createToolSpec({
 		name: 'getAccountNumbers',
-		description: 'Get account numbers',
-		schema: GetAccountNumbersParams,
+		description: 'Get account numbers for the authenticated user',
+		schema: GetAccountsParamsSchema,
 		call: async (c, p) => {
-			logger.info('[getAccountNumbers] Fetching account numbers')
-			const accounts = await c.trader.accounts.getAccountNumbers(p)
-			const displayMap = await buildAccountDisplayMap(c)
-			return accounts.map((acc) => {
-				return {
-					accountDisplay: displayMap[acc.accountNumber],
-					hashValue: acc.hashValue,
-				}
-			})
-		},
-	}),
-	createToolSpec({
-		name: 'getAccount',
-		description: 'Get account',
-		schema: GetAccountByNumberParams,
-		call: async (c, p) => {
-			const account = await c.trader.accounts.getAccountByNumber({
-				pathParams: { accountNumber: p.accountNumber },
-			})
-			const displayMap = await buildAccountDisplayMap(c)
-			return scrubAccountIdentifiers(account, displayMap)
+			log.info('[getAccountNumbers] Fetching account numbers')
+			return await c.accounts.getAccountNumbers(p)
 		},
 	}),
 	createToolSpec({
 		name: 'getOrders',
-		description: 'Get orders',
-		schema: GetOrdersParams,
+		description: 'Get orders with optional filtering by status, time range, and symbol',
+		schema: GetOrdersParamsSchema,
 		call: async (c, p) => {
-			logger.info('[getOrders] Fetching orders', {
+			log.info('[getOrders] Fetching orders', {
+				accountNumber: p.accountNumber,
 				maxResults: p.maxResults,
-				hasDateFilter: !!p.fromEnteredTime || !!p.toEnteredTime,
+				status: p.status,
 			})
-			const orders = await c.trader.orders.getOrders({ queryParams: p })
-			const displayMap = await buildAccountDisplayMap(c)
-			return scrubAccountIdentifiers(orders, displayMap)
-		},
-	}),
-	createToolSpec({
-		name: 'getOrdersByAccountNumber',
-		description: 'Get orders by account number',
-		schema: GetOrdersByAccountParams,
-		call: async (c, p) => {
-			const orders = await c.trader.orders.getOrdersByAccount({
-				pathParams: { accountNumber: p.accountNumber },
-				queryParams: p,
-			})
-			const displayMap = await buildAccountDisplayMap(c)
-			return scrubAccountIdentifiers(orders, displayMap)
-		},
-	}),
-	createToolSpec({
-		name: 'placeOrder',
-		description: 'Place order for a specific account',
-		schema: PlaceOrderParams,
-		call: async (c, p) => {
-			const order = await c.trader.orders.placeOrderForAccount({
-				pathParams: { accountNumber: p.accountNumber },
-				body: p,
-			})
-			const displayMap = await buildAccountDisplayMap(c)
-			return scrubAccountIdentifiers(order, displayMap)
+			return await c.orders.getOrders(p)
 		},
 	}),
 	createToolSpec({
 		name: 'getOrder',
-		description: 'Get order by order id for a specific account',
-		schema: GetOrderByIdParams,
+		description: 'Get a specific order by ID',
+		schema: GetOrderParamsSchema,
 		call: async (c, p) => {
-			const order = await c.trader.orders.getOrderByOrderId({
-				pathParams: { accountNumber: p.accountNumber, orderId: p.orderId },
+			log.info('[getOrder] Fetching order', {
+				orderId: p.orderId,
+				accountNumber: p.accountNumber,
 			})
-			const displayMap = await buildAccountDisplayMap(c)
-			return scrubAccountIdentifiers(order, displayMap)
+			// Use getOrders with specific filters to find the order
+			const orders = await c.orders.getOrders({ 
+				accountNumber: p.accountNumber,
+				maxResults: 1000 // Search through orders to find the specific one
+			})
+			const order = orders.find(o => o.orderId === p.orderId)
+			if (!order) {
+				throw new Error(`Order ${p.orderId} not found`)
+			}
+			return order
 		},
 	}),
 	createToolSpec({
-		name: 'cancelOrder',
-		description: 'Cancel order by order id for a specific account',
-		schema: CancelOrderParams,
+		name: 'getOrdersByAccountNumber',
+		description: 'Get orders for a specific account number',
+		schema: GetOrdersParamsSchema,
 		call: async (c, p) => {
-			const order = await c.trader.orders.cancelOrder({
-				pathParams: { accountNumber: p.accountNumber, orderId: p.orderId },
+			log.info('[getOrdersByAccountNumber] Fetching orders by account', {
+				accountNumber: p.accountNumber,
 			})
-			const displayMap = await buildAccountDisplayMap(c)
-			return scrubAccountIdentifiers(order, displayMap)
-		},
-	}),
-	createToolSpec({
-		name: 'replaceOrder',
-		description: 'Replace order by order id for a specific account',
-		schema: ReplaceOrderParams,
-		call: async (c, p) => {
-			const order = await c.trader.orders.replaceOrder({
-				pathParams: { accountNumber: p.accountNumber, orderId: p.orderId },
-				body: p,
-			})
-			const displayMap = await buildAccountDisplayMap(c)
-			return scrubAccountIdentifiers(order, displayMap)
+			if (!p.accountNumber) {
+				throw new Error('Account number is required')
+			}
+			return await c.orders.getOrders(p)
 		},
 	}),
 	createToolSpec({
 		name: 'getTransactions',
-		description: 'Get transactions',
-		schema: GetTransactionsParams,
+		description: 'Get transaction history with optional filtering',
+		schema: GetTransactionsParamsSchema,
 		call: async (c, p) => {
-			logger.info('[getTransactions] Fetching accounts')
-			const accounts = await c.trader.accounts.getAccountNumbers()
-			if (accounts.length === 0) return []
-			logger.info('[getTransactions] Fetching transactions', {
-				accountCount: accounts.length,
+			log.info('[getTransactions] Fetching transactions', {
+				accountNumber: p.accountNumber,
 				startDate: p.startDate,
 				endDate: p.endDate,
-				hasType: !!p.types,
 				symbol: p.symbol,
 			})
-			const transactions: unknown[] = []
-			for (const account of accounts) {
-				const accountTransactions = await c.trader.transactions.getTransactions(
-					{
-						pathParams: { accountNumber: account.hashValue },
-						queryParams: {
-							startDate: p.startDate,
-							endDate: p.endDate,
-							types: p.types,
-							symbol: p.symbol,
-						},
-					},
-				)
-				logger.debug('[getTransactions] Transactions for account', {
-					accountHash: account.hashValue,
-					count: accountTransactions.length,
-				})
-				transactions.push(...accountTransactions)
-			}
-			const displayMap = await buildAccountDisplayMap(c)
-			return scrubAccountIdentifiers(transactions, displayMap)
-		},
-	}),
-	createToolSpec({
-		name: 'getTransaction',
-		description: 'Get transaction',
-		schema: GetTransactionByIdParams,
-		call: async (c, p) => {
-			logger.info('[getTransaction] Fetching transaction', {
-				transactionId: p.transactionId,
-			})
+			return await c.transactions.getTransactions(p)
 		},
 	}),
 	createToolSpec({
 		name: 'getUserPreference',
-		description: 'Get user preference',
-		schema: GetUserPreferenceParams,
+		description: 'Get user trading preferences and settings',
+		schema: GetUserPreferenceParamsSchema,
 		call: async (c, p) => {
-			logger.info('[getUserPreference] Fetching user preference')
-			const userPreference = await c.trader.userPreference.getUserPreference(p)
-			if (userPreference.streamerInfo.length === 0) {
-				return []
+			log.info('[getUserPreference] Fetching user preferences')
+			// For now, return a placeholder as this would need to be implemented in the broker adapters
+			return {
+				message: 'User preferences not yet implemented in generic broker interface',
+				supportedBroker: c.brokerName
 			}
-			logger.info('[getUserPreference] User preference fetched', {
-				hasAccounts: userPreference.accounts?.length > 0,
-				accountCount: userPreference.accounts?.length || 0,
-				hasStreamerInfo: userPreference.streamerInfo?.length > 0,
+		},
+	}),
+	createToolSpec({
+		name: 'cancelOrder',
+		description: 'Cancel an order (Experimental)',
+		schema: GetOrderParamsSchema,
+		call: async (c, p) => {
+			log.info('[cancelOrder] Canceling order', {
+				orderId: p.orderId,
+				accountNumber: p.accountNumber,
 			})
-			const displayMap = await buildAccountDisplayMap(c)
-			return scrubAccountIdentifiers(userPreference, displayMap)
+			return await c.orders.cancelOrder(p.orderId, p.accountNumber)
+		},
+	}),
+	createToolSpec({
+		name: 'placeOrder',
+		description: 'Place a new order (Experimental)',
+		schema: PlaceOrderParamsSchema,
+		call: async (c, p) => {
+			log.info('[placeOrder] Placing order', {
+				accountNumber: p.accountNumber,
+				symbol: p.symbol,
+				quantity: p.quantity,
+				side: p.side,
+				orderType: p.orderType,
+			})
+			return await c.orders.placeOrder(p)
+		},
+	}),
+	createToolSpec({
+		name: 'replaceOrder',
+		description: 'Replace an existing order (Experimental)',
+		schema: ReplaceOrderParamsSchema,
+		call: async (c, p) => {
+			log.info('[replaceOrder] Replacing order', {
+				orderId: p.orderId,
+				accountNumber: p.accountNumber,
+				symbol: p.symbol,
+				quantity: p.quantity,
+				side: p.side,
+				orderType: p.orderType,
+			})
+			return await c.orders.replaceOrder(p)
+		},
+	}),
+	createToolSpec({
+		name: 'getPositions',
+		description: 'Get detailed position information with P&L',
+		schema: GetPositionsParamsSchema,
+		call: async (c, p) => {
+			log.info('[getPositions] Fetching positions', {
+				accountNumber: p.accountNumber,
+			})
+			return await c.portfolio.getPositions(p)
+		},
+	}),
+	createToolSpec({
+		name: 'getPortfolioSummary',
+		description: 'Get portfolio overview with total value and day change',
+		schema: GetPortfolioSummaryParamsSchema,
+		call: async (c, p) => {
+			log.info('[getPortfolioSummary] Fetching portfolio summary', {
+				accountNumber: p.accountNumber,
+			})
+			return await c.portfolio.getPortfolioSummary(p)
+		},
+	}),
+	createToolSpec({
+		name: 'getPerformance',
+		description: 'Get performance metrics and returns',
+		schema: GetPerformanceParamsSchema,
+		call: async (c, p) => {
+			log.info('[getPerformance] Fetching performance', {
+				accountNumber: p.accountNumber,
+				startDate: p.startDate,
+				endDate: p.endDate,
+			})
+			return await c.portfolio.getPerformance(p)
+		},
+	}),
+	createToolSpec({
+		name: 'getWatchlists',
+		description: 'Get user\'s watchlists',
+		schema: GetWatchlistsParamsSchema,
+		call: async (c, p) => {
+			log.info('[getWatchlists] Fetching watchlists')
+			return await c.watchlists.getWatchlists(p)
+		},
+	}),
+	createToolSpec({
+		name: 'createWatchlist',
+		description: 'Create a new watchlist',
+		schema: CreateWatchlistParamsSchema,
+		call: async (c, p) => {
+			log.info('[createWatchlist] Creating watchlist', {
+				name: p.name,
+				description: p.description,
+			})
+			return await c.watchlists.createWatchlist(p)
+		},
+	}),
+	createToolSpec({
+		name: 'addToWatchlist',
+		description: 'Add a symbol to a watchlist',
+		schema: AddToWatchlistParamsSchema,
+		call: async (c, p) => {
+			log.info('[addToWatchlist] Adding symbol to watchlist', {
+				watchlistId: p.watchlistId,
+				symbol: p.symbol,
+			})
+			return await c.watchlists.addToWatchlist(p)
+		},
+	}),
+	createToolSpec({
+		name: 'removeFromWatchlist',
+		description: 'Remove a symbol from a watchlist',
+		schema: RemoveFromWatchlistParamsSchema,
+		call: async (c, p) => {
+			log.info('[removeFromWatchlist] Removing symbol from watchlist', {
+				watchlistId: p.watchlistId,
+				symbol: p.symbol,
+			})
+			return await c.watchlists.removeFromWatchlist(p)
+		},
+	}),
+	createToolSpec({
+		name: 'getAccountActivity',
+		description: 'Get recent account activity feed',
+		schema: GetAccountActivityParamsSchema,
+		call: async (c, p) => {
+			log.info('[getAccountActivity] Fetching account activity', {
+				accountNumber: p.accountNumber,
+				maxResults: p.maxResults,
+				fromDate: p.fromDate,
+			})
+			return await c.activity.getAccountActivity(p)
 		},
 	}),
 ] as const
+
+export const traderTools = toolSpecs
